@@ -34,7 +34,8 @@ type Checkout struct {
 	Currency string  `json:"currency"`
 	Method   string  `json:"method"`
 	Email    string  `json:"email"`
-	URL      string  `json:"url"` // where to send the customer to pay
+	URL      string  `json:"url"`     // where to send the customer to pay
+	PaidAt   *string `json:"paid_at"` // ISO 8601 time it was paid, nil while unpaid
 }
 
 // Page is one page of a list, newest first. When HasMore is true, pass Next as After to get the following page.
@@ -44,7 +45,7 @@ type Page[T any] struct {
 	Next    *int `json:"next"`
 }
 
-// PageParams pages through a list: Limit is 1..500, After is the previous page's Next.
+// PageParams pages through a list: Limit is 1..500 (default 50), After is the previous page's Next.
 type PageParams struct {
 	Limit int
 	After int

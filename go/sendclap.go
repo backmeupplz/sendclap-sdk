@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	Version        = "0.2.0"
+	Version        = "0.3.0"
 	DefaultBaseURL = "https://sendclap.com"
 	DefaultTimeout = 15 * time.Second
 )
@@ -173,14 +173,14 @@ type DeactivateResult struct {
 const (
 	StatusActive       = "active"        // valid
 	StatusNotActivated = "not_activated" // key exists, this instance is not activated
-	StatusInvalid      = "invalid"       // key unknown
 	StatusDisabled     = "disabled"      // key disabled after a refund or dispute
+	StatusNotFound     = "not_found"     // key unknown
 )
 
 type ValidateResult struct {
 	Valid   bool         `json:"valid"`
 	Status  string       `json:"status"`
-	License *LicenseInfo `json:"license,omitempty"` // nil when Status is StatusInvalid or StatusDisabled
+	License *LicenseInfo `json:"license,omitempty"` // nil when Status is StatusNotFound or StatusDisabled
 	Product *ProductRef  `json:"product,omitempty"`
 }
 
@@ -207,27 +207,13 @@ func (l *LicenseClient) Activate(ctx context.Context, licenseKey, instanceName s
 }
 
 // Validate checks a key, and with a non-empty instanceID that the instance is activated.
-// An unknown or disabled key is a result (StatusInvalid, StatusDisabled), not an error; errors mean the answer is unknown (e.g. offline).
+// An unknown or disabled key is a result (StatusNotFound, StatusDisabled), not an error; errors mean the answer is unknown (e.g. offline).
 func (l *LicenseClient) Validate(ctx context.Context, licenseKey, instanceID string) (*ValidateResult, error) {
-	var r struct {
-		Valid   bool        `json:"valid"`
-		License LicenseInfo `json:"license"`
-		Product ProductRef  `json:"product"`
-	}
+	var r ValidateResult
 	if err := l.c.do(ctx, http.MethodPost, "/licenses/validate", licenseBody(licenseKey, instanceID), &r); err != nil {
-		if errors.Is(err, ErrInvalidLicense) {
-			return &ValidateResult{Status: StatusInvalid}, nil
-		}
-		if errors.Is(err, ErrLicenseDisabled) {
-			return &ValidateResult{Status: StatusDisabled}, nil
-		}
 		return nil, err
 	}
-	status := StatusActive
-	if !r.Valid {
-		status = StatusNotActivated
-	}
-	return &ValidateResult{Valid: r.Valid, Status: status, License: &r.License, Product: &r.Product}, nil
+	return &r, nil
 }
 
 // Deactivate releases an instance, freeing one activation. ErrInstanceNotFound means it wasn't activated.

@@ -1,7 +1,7 @@
 // Sendclap client for JavaScript and TypeScript: license checks for the apps you ship, and the creator REST API for your server.
 // Zero dependencies; uses the global fetch (Node 18+, Bun, Deno, browsers, Electron).
 
-export const VERSION = '0.2.0'
+export const VERSION = '0.3.0'
 const DEFAULT_BASE_URL = 'https://sendclap.com'
 const DEFAULT_TIMEOUT_MS = 15_000
 
@@ -68,8 +68,9 @@ export interface ActivateResult { instance_id: string; license: LicenseInfo; pro
 export interface DeactivateResult { license: LicenseInfo; product: ProductRef }
 export interface ValidateResult {
   valid: boolean
-  /** `active`: valid. `not_activated`: the key exists but this instance isn't activated. `invalid`: unknown key. `disabled`: refunded or disputed. */
-  status: 'active' | 'not_activated' | 'invalid' | 'disabled'
+  /** `active`: valid. `not_activated`: the key exists but this instance isn't activated. `not_found`: unknown key. `disabled`: refunded or disputed. */
+  status: 'active' | 'not_activated' | 'disabled' | 'not_found'
+  /** Present for `active` and `not_activated` only. */
   license?: LicenseInfo
   product?: ProductRef
 }
@@ -97,6 +98,8 @@ export interface Checkout {
   email: string | null
   /** Where to send the customer to pay. */
   url: string
+  /** ISO 8601 time the checkout was paid, or null while unpaid. */
+  paid_at: string | null
 }
 export interface Totals { payments: number; gross: number; fees: number; net: number }
 export interface Stats {
@@ -105,7 +108,7 @@ export interface Stats {
   members: { active: number; monthly_recurring: number }
   open_disputes: number
 }
-/** `limit` is at most 500; `after` is the previous page's `next`. */
+/** `limit` defaults to 50 and is at most 500; `after` is the previous page's `next`. */
 export interface PageParams { limit?: number; after?: number }
 export interface PaymentFilter extends PageParams { status?: string; type?: string; email?: string }
 export interface LicenseFilter extends PageParams { email?: string }
@@ -200,14 +203,7 @@ export class LicenseClient {
 
   /** Checks the key (and, with an instance id, that this device is activated). Throws only when no definite answer came back. */
   async validate(licenseKey: string, instanceId?: string): Promise<ValidateResult> {
-    try {
-      const { valid, license, product } = await this.call<{ valid: boolean; license: LicenseInfo; product: ProductRef }>('validate', licenseKey, instanceId)
-      return { valid, status: valid ? 'active' : 'not_activated', license, product }
-    } catch (e) {
-      if (e instanceof InvalidLicenseError) return { valid: false, status: 'invalid' }
-      if (e instanceof DisabledLicenseError) return { valid: false, status: 'disabled' }
-      throw e
-    }
+    return this.call<ValidateResult>('validate', licenseKey, instanceId)
   }
 
   /** Releases a device, freeing one activation. Throws InstanceNotFoundError if it wasn't activated. */

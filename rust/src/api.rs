@@ -40,6 +40,8 @@ pub struct Checkout {
     pub email: Option<String>,
     /// Where to send the customer to pay.
     pub url: String,
+    /// ISO 8601 time it was paid, `None` while unpaid.
+    pub paid_at: Option<String>,
 }
 
 /// One page of a list, newest first. When `has_more` is true, pass `next` as `after` for the following page.
@@ -89,7 +91,7 @@ impl<T> Iterator for Paged<'_, T> {
     }
 }
 
-/// `limit` is at most 500; `after` is the previous page's `next`.
+/// `limit` defaults to 50 and is at most 500; `after` is the previous page's `next`.
 #[derive(Debug, Clone, Default)]
 pub struct PageParams {
     pub limit: Option<u32>,

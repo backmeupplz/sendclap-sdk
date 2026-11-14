@@ -24,7 +24,7 @@ default: unlocked = v.Valid; if v.Valid { lastValidated = time.Now() } // save l
 }
 ```
 
-`Validate` never fails for a bad key: an unknown key comes back as `Status == StatusInvalid`, a refunded or disputed one as `StatusDisabled` (so you can say "this license was refunded"), an inactive device as `StatusNotActivated`. `Activate` returns `ErrLicenseDisabled` for a refunded key, and `Deactivate` returns `ErrInstanceNotFound` for an instance that isn't activated. An error means the answer is unknown (offline, server down), so cache the time of the last successful validation and keep the app unlocked for a grace period. Activate once on first run and store the instance name; `Deactivate(ctx, key, name)` frees the seat when the user moves to another machine.
+`Validate` never fails for a bad key: an unknown key comes back as `Status == StatusNotFound`, a refunded or disputed one as `StatusDisabled` (so you can say "this license was refunded"), an inactive device as `StatusNotActivated`. `Activate` returns `ErrLicenseDisabled` for a refunded key, and `Deactivate` returns `ErrInstanceNotFound` for an instance that isn't activated. An error means the answer is unknown (offline, server down), so cache the time of the last successful validation and keep the app unlocked for a grace period. Activate once on first run and store the instance name; `Deactivate(ctx, key, name)` frees the seat when the user moves to another machine.
 
 `InstanceName()` returns the machine hostname. It is sent to Sendclap and shown to the creator, and two machines with the same hostname share one activation; pass your own stable id (for example a random UUID saved on first run) if that matters. The instance id Sendclap returns is the name you pass.
 
@@ -49,7 +49,7 @@ for p, err := range api.AllPayments(ctx, sendclap.PaymentFilter{Status: "paid"})
 }
 ```
 
-Lists return a `*Page[T]` (`Data`, `HasMore`, `Next`), newest first; `Limit` is at most 500 and `After` is the previous page's `Next`. `AllPayments`, `AllMembers`, `AllLicenses` and `AllDisputes` return an `iter.Seq2[T, error]`, so the module needs Go 1.23.
+Lists return a `*Page[T]` (`Data`, `HasMore`, `Next`), newest first; `Limit` defaults to 50 and is at most 500 and `After` is the previous page's `Next`. `AllPayments`, `AllMembers`, `AllLicenses` and `AllDisputes` return an `iter.Seq2[T, error]`, so the module needs Go 1.23.
 
 Methods: `CreateCheckout` and `GetCheckout` (both return the checkout `URL`), `Me`, `GetPayment`, `ListProducts`, `ListMemberships`, `ListPayments`, `ListMembers`, `ListLicenses`, `ListDisputes`, the `All…` iterators, and `GetCreator` (public, works with an empty key). Options for both clients: `sendclap.WithBaseURL(url)`, `sendclap.WithTimeout(d)` (default 15 s).
 

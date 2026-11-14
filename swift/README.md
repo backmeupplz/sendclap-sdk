@@ -5,7 +5,7 @@ The official Swift client for [Sendclap](https://sendclap.com): license keys for
 ## Install
 
 ```swift
-.package(url: "https://github.com/backmeupplz/sendclap-sdk", from: "0.2.0")
+.package(url: "https://github.com/backmeupplz/sendclap-sdk", from: "0.3.0")
 ```
 
 and add the `Sendclap` product to your target.
@@ -24,14 +24,14 @@ _ = try await licenses.activate(licenseKey: key, instanceName: instance) // once
 do {
     let r = try await licenses.validate(licenseKey: key, instanceId: instance)
     if r.valid { UserDefaults.standard.set(Date(), forKey: "licenseCheckedAt") }
-    else { lock(refunded: r.status == .disabled) } // .invalid, .disabled (refunded or disputed) or .notActivated
+    else { lock(refunded: r.status == .disabled) } // .notFound, .disabled (refunded or disputed) or .notActivated
 } catch { // offline: accept the last good check for 7 days
     let last = UserDefaults.standard.object(forKey: "licenseCheckedAt") as? Date ?? .distantPast
     if Date().timeIntervalSince(last) > 7 * 86400 { lock() }
 }
 ```
 
-`validate` returns `.invalid` for an unknown key and `.disabled` for a refunded or disputed one, while `activate` throws `.licenseDisabled` for the latter. `deactivate(licenseKey:instanceId:)` frees the seat, for example from a "Sign out of this Mac" button, and throws `.instanceNotFound` if that instance wasn't activated.
+`validate` returns `.notFound` for an unknown key and `.disabled` for a refunded or disputed one, while `activate` throws `.licenseDisabled` for the latter. `deactivate(licenseKey:instanceId:)` frees the seat, for example from a "Sign out of this Mac" button, and throws `.instanceNotFound` if that instance wasn't activated.
 
 `LicenseClient.instanceName()` returns the host name. It is sent to Sendclap and shown to the creator, and two machines with the same host name share one activation. On iOS the host name is not useful: pass `UIDevice.current.identifierForVendor?.uuidString`, or a UUID you save on first launch. The instance id Sendclap returns is the name you pass (up to 200 characters).
 
@@ -52,7 +52,7 @@ for try await p in api.allPayments(status: "paid") { // follows `next` across pa
 }
 ```
 
-Lists return a `Page<T>` (`data`, `hasMore`, `next`), newest first; `limit` is at most 500 and `after` is the previous page's `next`. `allPayments`, `allMembers`, `allLicenses` and `allDisputes` return an `AsyncThrowingStream`.
+Lists return a `Page<T>` (`data`, `hasMore`, `next`), newest first; `limit` defaults to 50 and is at most 500 and `after` is the previous page's `next`. `allPayments`, `allMembers`, `allLicenses` and `allDisputes` return an `AsyncThrowingStream`.
 
 Also: `me()`, `getPayment(id:)`, `listPayments(status:type:email:limit:after:)`, `listMembers(limit:after:)`, `listLicenses(email:limit:after:)`, `listDisputes(limit:after:)`, `listProducts()`, `listMemberships()` and the public `getCreator(handle:)`, which works with `apiKey: nil`. Both clients take `baseURL:`, `timeout:` (seconds, default 15) and `session:`.
 

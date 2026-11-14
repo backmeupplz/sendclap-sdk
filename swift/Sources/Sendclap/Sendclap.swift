@@ -182,16 +182,9 @@ public final class LicenseClient {
     }
 
     /// Checks the key, and with `instanceId` that this instance is activated. An unknown or disabled key returns
-    /// status `.invalid` or `.disabled` instead of throwing, so a thrown error means "could not check" (offline: use your grace period).
+    /// status `.notFound` or `.disabled` instead of throwing, so a thrown error means "could not check" (offline: use your grace period).
     public func validate(licenseKey: String, instanceId: String? = nil) async throws -> ValidateResult {
-        do {
-            let r: ValidateResponse = try await t.send("POST", "/licenses/validate", body: body(licenseKey, instanceId))
-            return ValidateResult(valid: r.valid, status: r.valid ? .active : .notActivated, license: r.license, product: r.product)
-        } catch SendclapError.invalidLicense {
-            return ValidateResult(valid: false, status: .invalid, license: nil, product: nil)
-        } catch SendclapError.licenseDisabled {
-            return ValidateResult(valid: false, status: .disabled, license: nil, product: nil)
-        }
+        try await t.send("POST", "/licenses/validate", body: body(licenseKey, instanceId))
     }
 
     /// Releases an instance, freeing one activation. Throws `.instanceNotFound` if it wasn't activated.
@@ -223,7 +216,7 @@ public final class APIClient {
 
     public func me() async throws -> Stats { try await t.send("GET", "/me") }
 
-    // Lists are pages, newest first. `limit` is 1 to 500 (the server defaults to 50 for payments, 500 otherwise) and `after`
+    // Lists are pages, newest first. `limit` is 1 to 500 (the server defaults to 50) and `after`
     // is the previous page's `next`. The `all…` streams follow `next`: `for try await p in api.allPayments(status: "paid")`.
 
     public func listPayments(status: String? = nil, type: String? = nil, email: String? = nil, limit: Int? = nil, after: Int? = nil) async throws -> Page<Payment> {

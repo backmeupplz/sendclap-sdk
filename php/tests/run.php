@@ -92,7 +92,7 @@ test('activate', function () use ($lic) {
     eq('POST', $req['method']);
     eq('/api/v1/licenses/activate', $req['uri']);
     eq(['license_key' => 'GOOD', 'instance_id' => 'dev-1'], $req['body']);
-    eq('sendclap-php/0.2.0', $req['headers']['user-agent']);
+    eq('sendclap-php/0.3.0', $req['headers']['user-agent']);
     eq('application/json', $req['headers']['content-type']);
     eq(false, isset($req['headers']['authorization']));
 });
@@ -131,7 +131,7 @@ test('validate', function () use ($lic) {
     $r = $lic->validate('GOOD', 'other');
     eq([false, 'not_activated', 'GOOD'], [$r->valid, $r->status, $r->license->key]);
     $r = $lic->validate('BAD', 'dev-1');
-    eq([false, 'invalid', null, null], [$r->valid, $r->status, $r->license, $r->product]);
+    eq([false, 'not_found', null, null], [$r->valid, $r->status, $r->license, $r->product]);
     $r = $lic->validate('REFUNDED', 'dev-1');
     eq([false, 'disabled', null, null], [$r->valid, $r->status, $r->license, $r->product]);
 });
@@ -166,7 +166,8 @@ test('checkouts', function () use ($api) {
     eq(['type' => 'product', 'product_id' => 1, 'email' => 'buyer@example.com'], $req['body']);
     eq('Bearer sc_test', $req['headers']['authorization']);
     $g = $api->getCheckout('0xabc');
-    eq(['pending', 'http://x/checkout/0xabc'], [$g['status'], $g['url']]);
+    eq(['pending', 'http://x/checkout/0xabc', null], [$g['status'], $g['url'], $g['paid_at']]);
+    eq('2026-11-14T10:00:00.000Z', $api->getCheckout('0xpaid')['paid_at']);
 });
 
 test('payments page', function () use ($api) {

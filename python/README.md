@@ -19,7 +19,7 @@ def licensed(key: str, cache: dict) -> bool:
         return time.time() - cache.get("validated_at", 0) < 7 * 86400
     if r.valid:
         cache["validated_at"] = time.time()  # persist cache to disk yourself
-    return r.valid  # status "invalid", "disabled" or "not_activated": lock the app
+    return r.valid  # status "not_found", "disabled" or "not_activated": lock the app
 ```
 
 On first run, activate the device and remember the instance id:
@@ -33,7 +33,7 @@ except DisabledLicenseError: ...  # the payment was refunded or disputed
 except ActivationLimitError as e: print(f"Used on {e.license.activations}/{e.license.max_activations} devices")
 ```
 
-`deactivate(key, instance_id)` frees the device again, and raises `InstanceNotFoundError` if it wasn't activated. `validate` never raises for a bad key; it returns `status` `"active"`, `"not_activated"`, `"invalid"` (unknown key) or `"disabled"` (refunded or disputed), and raises `NetworkError` only when it could not reach Sendclap, so you can tell "offline" from "invalid" and show "this license was refunded" for `"disabled"`.
+`deactivate(key, instance_id)` frees the device again, and raises `InstanceNotFoundError` if it wasn't activated. `validate` never raises for a bad key; it returns `status` `"active"`, `"not_activated"`, `"disabled"` (refunded or disputed) or `"not_found"` (unknown key), and raises `NetworkError` only when it could not reach Sendclap, so you can tell "offline" from "not found" and show "this license was refunded" for `"disabled"`.
 
 **Instance name:** `instance_name()` is the machine's hostname. It is sent to Sendclap and shown to the creator, and two machines with the same hostname share one activation. If that matters, pass your own stable id instead (for example a `uuid4()` saved on first run). The instance id Sendclap returns is the name you send.
 
@@ -55,7 +55,7 @@ for p in api.all_payments(status="paid"):  # a generator that follows `next` acr
     print(p["amount"], p["email"])
 ```
 
-Lists (`list_payments`, `list_members`, `list_licenses`, `list_disputes`) return a `Page` with `data`, `has_more` and `next`, newest first; `limit` is at most 500 and `after` is the previous page's `next`. `all_payments`, `all_members`, `all_licenses` and `all_disputes` take the same filters and yield every item.
+Lists (`list_payments`, `list_members`, `list_licenses`, `list_disputes`) return a `Page` with `data`, `has_more` and `next`, newest first; `limit` defaults to 50 and is at most 500 and `after` is the previous page's `next`. `all_payments`, `all_members`, `all_licenses` and `all_disputes` take the same filters and yield every item.
 
 Methods: `create_checkout` and `get_checkout` (both return the checkout `url`), `me`, `get_payment`, `list_products`, `list_memberships`, the list and `all_*` methods above, and `get_creator` (public, works with `ApiClient()` and no key). Items are plain dicts with the API's JSON fields, typed with `TypedDict`.
 

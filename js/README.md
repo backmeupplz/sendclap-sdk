@@ -19,7 +19,7 @@ try {
   settings.instanceId ??= (await licenses.activate(key, await instanceName())).instance_id // first run
   const r = await licenses.validate(key, settings.instanceId)
   if (r.valid) settings.lastValidated = Date.now()
-  else lockApp(r.status) // "invalid" (unknown key), "disabled" (refunded or disputed) or "not_activated"
+  else lockApp(r.status) // "not_found" (unknown key), "disabled" (refunded or disputed) or "not_activated"
 } catch (e) {
   // offline: keep working for 7 days after the last successful check
   if (!(e instanceof NetworkError) || Date.now() - settings.lastValidated > 7 * 86400_000) lockApp('unverified')
@@ -27,7 +27,7 @@ try {
 ```
 
 - `activate(licenseKey, instanceName)` registers this device and returns `{ instance_id, license, product }`. Activating the same instance again counts once, and the instance id is simply the name you passed.
-- `validate(licenseKey, instanceId?)` returns `{ valid, status, license?, product? }`. Its `status` is `active`, `not_activated` (the key exists but this device isn't activated), `invalid` (unknown key) or `disabled` (the payment was refunded or disputed). It throws only when no definite answer came back, which is how you tell "offline" from "invalid".
+- `validate(licenseKey, instanceId?)` returns `{ valid, status, license?, product? }`. Its `status` is `active`, `not_activated` (the key exists but this device isn't activated), `disabled` (the payment was refunded or disputed) or `not_found` (unknown key). It throws only when no definite answer came back, which is how you tell "offline" from "not found".
 - `deactivate(licenseKey, instanceId)` frees one activation so the customer can move to another machine. It throws `InstanceNotFoundError` if that instance wasn't activated.
 
 To tell a customer why a license doesn't work, branch on the status, or catch the typed error from `activate`:
@@ -35,7 +35,7 @@ To tell a customer why a license doesn't work, branch on the status, or catch th
 ```ts
 const r = await licenses.validate(key, instanceId)
 if (r.status === 'disabled') showMessage('This license was refunded or disputed.')
-else if (r.status === 'invalid') showMessage('That license key does not exist.')
+else if (r.status === 'not_found') showMessage('That license key does not exist.')
 
 try { await licenses.activate(key, name) } catch (e) {
   if (e instanceof DisabledLicenseError) showMessage('This license was refunded or disputed.')
@@ -44,7 +44,7 @@ try { await licenses.activate(key, name) } catch (e) {
 
 `instanceName()` returns the hostname in Node, Bun, Deno and Electron's main process, and a random id kept in `localStorage` in browsers. The name is sent to Sendclap and shown to the creator in the activity log, and machines that share a hostname share an activation. If that matters, generate your own id (for example `crypto.randomUUID()` saved on first run) and pass it instead.
 
-Cache the result of the last successful `validate` and validate again at startup or once a day. On a `NetworkError`, accept the cached result for a grace period. On `invalid` or `not_activated`, lock.
+Cache the result of the last successful `validate` and validate again at startup or once a day. On a `NetworkError`, accept the cached result for a grace period. On `not_found`, `disabled` or `not_activated`, lock.
 
 ## Creator API
 

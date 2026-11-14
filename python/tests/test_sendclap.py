@@ -17,7 +17,7 @@ from sendclap import (  # noqa: E402
 LICENSE = {"key": "GOOD", "activations": 1, "max_activations": 3}
 PRODUCT = {"id": 1, "name": "Pro"}
 CHECKOUT = {"id": "0xabc", "status": "pending", "type": "product", "amount": 29, "currency": "usd",
-            "method": "card", "email": "buyer@example.com", "url": "http://x/checkout/0xabc"}
+            "method": "card", "email": "buyer@example.com", "url": "http://x/checkout/0xabc", "paid_at": None}
 PAYMENTS = [{"id": 3, "status": "paid"}, {"id": 2, "status": "paid"}, {"id": 1, "status": "paid"}]
 SEEN = []  # (method, path, headers, body) of every request
 
@@ -42,22 +42,27 @@ class Mock(BaseHTTPRequestHandler):
         p = url.path
         if p.startswith("/api/v1/licenses/"):
             action, key, inst = p.rsplit("/", 1)[1], body.get("license_key"), body.get("instance_id")
-            if key == "REFUNDED":
-                return self.reply(403, {"valid": False, "error": "this license key is disabled", "code": "license_disabled"})
-            if key != "GOOD" and key != "FULL":
-                return self.reply(404, {"valid": False, "error": "license key not found", "code": "license_not_found"})
             if action == "validate":
-                return self.reply(200, {"valid": inst in (None, "dev-1"), "license": LICENSE, "product": PRODUCT})
+                if key == "REFUNDED":
+                    return self.reply(200, {"valid": False, "status": "disabled"})
+                if key not in ("GOOD", "FULL"):
+                    return self.reply(200, {"valid": False, "status": "not_found"})
+                ok = inst in (None, "dev-1")
+                return self.reply(200, {"valid": ok, "status": "active" if ok else "not_activated",
+                                        "license": LICENSE, "product": PRODUCT})
+            if key == "REFUNDED":
+                return self.reply(403, {"error": "this license key is disabled", "code": "license_disabled"})
+            if key not in ("GOOD", "FULL"):
+                return self.reply(404, {"error": "license key not found", "code": "license_not_found"})
             if not inst:
                 return self.reply(400, {"error": "instance_id is required", "code": "bad_request"})
             if action == "activate" and key == "FULL":
-                return self.reply(409, {"activated": False, "error": "activation limit reached", "code": "activation_limit",
+                return self.reply(409, {"error": "activation limit reached", "code": "activation_limit",
                                         "license": {"key": "FULL", "activations": 3, "max_activations": 3}, "product": PRODUCT})
             if action == "activate":
                 return self.reply(200, {"activated": True, "instance_id": inst, "license": LICENSE, "product": PRODUCT})
             if inst != "dev-1":
-                return self.reply(404, {"deactivated": False, "error": "that instance is not activated",
-                                        "code": "instance_not_found", "license": LICENSE, "product": PRODUCT})
+                return self.reply(404, {"error": "that instance is not activated", "code": "instance_not_found"})
             return self.reply(200, {"deactivated": True, "license": dict(LICENSE, activations=0), "product": PRODUCT})
         if p == "/api/v1/creators/demo":
             return self.reply(200, {"handle": "demo", "name": "Ada Builds"})
@@ -67,6 +72,8 @@ class Mock(BaseHTTPRequestHandler):
             return self.reply(201, CHECKOUT)
         if p == "/api/v1/checkouts/0xabc":
             return self.reply(200, CHECKOUT)
+        if p == "/api/v1/checkouts/0xpaid":
+            return self.reply(200, dict(CHECKOUT, status="paid", paid_at="2026-11-14T10:00:00.000Z"))
         if p == "/api/v1/payments":  # two per page, newest first, cursor = the last id on the page
             after = int(parse_qs(url.query).get("after", ["1000"])[0])
             rows = [r for r in PAYMENTS if r["id"] < after]
@@ -111,7 +118,7 @@ class SendclapTest(unittest.TestCase):
         method, path, headers, body = SEEN[-1]
         self.assertEqual((method, path), ("POST", "/api/v1/licenses/activate"))
         self.assertEqual(body, {"license_key": "GOOD", "instance_id": "dev-1"})
-        self.assertEqual(headers["User-Agent"], "sendclap-python/0.2.0")
+        self.assertEqual(headers["User-Agent"], "sendclap-python/0.3.0")
         self.assertEqual(headers["Content-Type"], "application/json")
         self.assertNotIn("Authorization", headers)
 
@@ -149,7 +156,7 @@ class SendclapTest(unittest.TestCase):
         r = self.lic.validate("GOOD", "other")
         self.assertEqual((r.valid, r.status, r.license.key), (False, "not_activated", "GOOD"))
         r = self.lic.validate("BAD", "dev-1")
-        self.assertEqual((r.valid, r.status, r.license, r.product), (False, "invalid", None, None))
+        self.assertEqual((r.valid, r.status, r.license, r.product), (False, "not_found", None, None))
         r = self.lic.validate("REFUNDED", "dev-1")
         self.assertEqual((r.valid, r.status, r.license, r.product), (False, "disabled", None, None))
 
@@ -187,6 +194,8 @@ class SendclapTest(unittest.TestCase):
         self.assertEqual(headers["Authorization"], "Bearer sc_test")
         g = self.api.get_checkout("0xabc")
         self.assertEqual((g["status"], g["url"]), ("pending", "http://x/checkout/0xabc"))
+        self.assertIsNone(g["paid_at"])
+        self.assertEqual(self.api.get_checkout("0xpaid")["paid_at"], "2026-11-14T10:00:00.000Z")
 
     def test_payments_page(self):
         page = self.api.list_payments(status="paid", limit=2)

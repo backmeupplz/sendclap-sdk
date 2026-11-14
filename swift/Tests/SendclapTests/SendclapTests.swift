@@ -44,7 +44,7 @@ final class MockServer: URLProtocol {
     }
 
     static let meta = #""license":{"key":"GOOD","activations":1,"max_activations":3},"product":{"id":1,"name":"Pro"}"#
-    static let checkout = #"{"id":"0xabc","status":"pending","type":"product","amount":29,"currency":"usd","method":"card","email":"b@example.com","url":"https://sendclap.com/checkout/0xabc""#
+    static let checkout = #"{"id":"0xabc","status":"pending","type":"product","amount":29,"currency":"usd","method":"card","email":"b@example.com","url":"https://sendclap.com/checkout/0xabc","paid_at":null"#
     static func payment(_ id: Int, _ reference: String) -> String {
         "{\"id\":\(id),\"type\":\"product\",\"method\":\"card\",\"status\":\"paid\",\"amount\":29,\"fee\":0.29,\"currency\":\"usd\",\"email\":null,\"message\":null,\"reference\":\"\(reference)\",\"test\":false,\"created_at\":\"2026-11-13T18:04:11.000Z\"}"
     }
@@ -55,15 +55,20 @@ final class MockServer: URLProtocol {
         if path.hasPrefix("/api/v1/licenses/") {
             let b = (try? JSONSerialization.jsonObject(with: body ?? Data())) as? [String: String] ?? [:]
             let key = b["license_key"], instance = b["instance_id"], action = url.lastPathComponent
-            if key == "REFUNDED" { return (403, #"{"valid":false,"error":"this license key is disabled","code":"license_disabled"}"#) }
-            if key != "GOOD" && key != "FULL" { return (404, #"{"valid":false,"error":"license key not found","code":"license_not_found"}"#) }
-            if action == "validate" { return (200, "{\"valid\":\(instance == nil || instance == "dev-1"),\(meta)}") }
+            if action == "validate" {
+                if key == "REFUNDED" { return (200, #"{"valid":false,"status":"disabled"}"#) }
+                if key != "GOOD" && key != "FULL" { return (200, #"{"valid":false,"status":"not_found"}"#) }
+                let ok = instance == nil || instance == "dev-1"
+                return (200, "{\"valid\":\(ok),\"status\":\"\(ok ? "active" : "not_activated")\",\(meta)}")
+            }
+            if key == "REFUNDED" { return (403, #"{"error":"this license key is disabled","code":"license_disabled"}"#) }
+            if key != "GOOD" && key != "FULL" { return (404, #"{"error":"license key not found","code":"license_not_found"}"#) }
             guard let instance = instance else { return (400, #"{"error":"instance_id is required","code":"bad_request"}"#) }
             if action == "deactivate" && instance != "dev-1" {
-                return (404, "{\"deactivated\":false,\"error\":\"that instance is not activated\",\"code\":\"instance_not_found\",\(meta)}")
+                return (404, #"{"error":"that instance is not activated","code":"instance_not_found"}"#)
             }
             if action == "activate" && key == "FULL" {
-                return (409, #"{"activated":false,"error":"activation limit reached","code":"activation_limit","license":{"key":"FULL","activations":3,"max_activations":3},"product":{"id":1,"name":"Pro"}}"#)
+                return (409, #"{"error":"activation limit reached","code":"activation_limit","license":{"key":"FULL","activations":3,"max_activations":3},"product":{"id":1,"name":"Pro"}}"#)
             }
             if action == "activate" { return (200, "{\"activated\":true,\"instance_id\":\"\(instance)\",\(meta)}") }
             return (200, "{\"deactivated\":true,\(meta.replacingOccurrences(of: "\"activations\":1", with: "\"activations\":0"))}")
@@ -76,6 +81,7 @@ final class MockServer: URLProtocol {
         switch (req.httpMethod ?? "GET", path) {
         case ("POST", "/api/v1/checkouts"): return (201, checkout + "}")
         case ("GET", "/api/v1/checkouts/0xabc"): return (200, checkout + "}")
+        case ("GET", "/api/v1/checkouts/0xpaid"): return (200, checkout.replacingOccurrences(of: "\"paid_at\":null", with: "\"paid_at\":\"2026-11-14T10:00:00.000Z\"") + "}")
         case ("GET", "/api/v1/me"):
             return (200, #"{"handle":"demo","name":"Ada","url":"u","currency":"usd","last_30_days":{"payments":2,"gross":58,"fees":0.58,"net":57.42},"all_time":{"payments":3,"gross":87,"fees":0.87,"net":86.13},"members":{"active":1,"monthly_recurring":5},"open_disputes":0}"#)
         case ("GET", "/api/v1/payments"):
@@ -157,7 +163,7 @@ final class LicenseClientTests: XCTestCase {
         XCTAssertFalse(other.valid)
         XCTAssertEqual(other.license?.maxActivations, 3)
         let bad = try await client.validate(licenseKey: "BAD", instanceId: "dev-1")
-        XCTAssertEqual(bad, ValidateResult(valid: false, status: .invalid, license: nil, product: nil))
+        XCTAssertEqual(bad, ValidateResult(valid: false, status: .notFound, license: nil, product: nil))
         let refunded = try await client.validate(licenseKey: "REFUNDED", instanceId: "dev-1")
         XCTAssertEqual(refunded, ValidateResult(valid: false, status: .disabled, license: nil, product: nil))
     }
@@ -208,6 +214,9 @@ final class APIClientTests: XCTestCase {
         let c = try await client.getCheckout(id: "0xabc")
         XCTAssertEqual(c.status, "pending")
         XCTAssertEqual(c.url, "https://sendclap.com/checkout/0xabc")
+        XCTAssertNil(c.paidAt)
+        let paid = try await client.getCheckout(id: "0xpaid")
+        XCTAssertEqual(paid.paidAt, "2026-11-14T10:00:00.000Z")
         XCTAssertEqual(MockServer.last?.httpMethod, "GET")
     }
 

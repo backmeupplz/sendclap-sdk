@@ -23,7 +23,7 @@ let unlocked = match lc.validate(&key, Some(&name)) {
 };
 ```
 
-`validate` never fails for a bad key: an unknown key comes back as `ValidationStatus::Invalid`, a refunded or disputed one as `Disabled` (so you can say "this license was refunded"), an inactive device as `NotActivated`. `activate` returns `Error::LicenseDisabled` for a refunded key, and `deactivate` returns `Error::InstanceNotFound` for an instance that isn't activated. An `Err` means the answer is unknown (offline, server down), so cache the time of the last successful validation and keep the app unlocked for a grace period. `ValidateResult` is `Serialize`, so you can store it as is. `deactivate(&key, &name)` frees the seat when the user moves to another machine.
+`validate` never fails for a bad key: an unknown key comes back as `ValidationStatus::NotFound`, a refunded or disputed one as `Disabled` (so you can say "this license was refunded"), an inactive device as `NotActivated`. `activate` returns `Error::LicenseDisabled` for a refunded key, and `deactivate` returns `Error::InstanceNotFound` for an instance that isn't activated. An `Err` means the answer is unknown (offline, server down), so cache the time of the last successful validation and keep the app unlocked for a grace period. `ValidateResult` is `Serialize`, so you can store it as is. `deactivate(&key, &name)` frees the seat when the user moves to another machine.
 
 `instance_name()` returns the machine hostname (`COMPUTERNAME`/`HOSTNAME`, else the `hostname` command). It is sent to Sendclap and shown to the creator, and two machines with the same hostname share one activation; pass your own stable id (for example a random UUID saved on first run) if that matters. The instance id Sendclap returns is the name you pass.
 
@@ -45,7 +45,7 @@ for payment in api.all_payments(&filter) { // follows `next` across pages
 }
 ```
 
-Lists return a `Page<T>` (`data`, `has_more`, `next`), newest first; `limit` is at most 500 and `after` is the previous page's `next`. `all_payments`, `all_members`, `all_licenses` and `all_disputes` return an iterator of `Result<T>` that fetches pages lazily.
+Lists return a `Page<T>` (`data`, `has_more`, `next`), newest first; `limit` defaults to 50 and is at most 500 and `after` is the previous page's `next`. `all_payments`, `all_members`, `all_licenses` and `all_disputes` return an iterator of `Result<T>` that fetches pages lazily.
 
 Methods: `create_checkout` and `get_checkout` (both return the checkout `url`), `me`, `get_payment`, `list_products`, `list_memberships`, `list_payments`, `list_members(&PageParams)`, `list_licenses(&LicenseFilter)`, `list_disputes(&PageParams)`, the `all_*` iterators, `get_creator` (public, works with an empty key). Use `LicenseClient::with_options(base_url, timeout)` / `ApiClient::with_options(key, base_url, timeout)` to change the base URL or the 15 s timeout.
 

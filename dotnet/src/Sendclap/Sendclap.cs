@@ -66,7 +66,7 @@ namespace Sendclap
 
     internal sealed class Transport
     {
-        internal const string Version = "0.2.0";
+        internal const string Version = "0.3.0";
         internal const string DefaultBaseUrl = "https://sendclap.com";
         // One shared client avoids socket exhaustion; the timeout is applied per request instead.
         static readonly HttpClient Shared = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
@@ -74,6 +74,7 @@ namespace Sendclap
         {
             PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower) }, // "not_activated" <-> LicenseStatus.NotActivated
         };
 
         readonly HttpClient http;
@@ -188,25 +189,11 @@ namespace Sendclap
 
         /// <summary>
         /// Checks the key, and with <paramref name="instanceId"/> that this instance is activated. An unknown or disabled key
-        /// returns <see cref="LicenseStatus.Invalid"/> or <see cref="LicenseStatus.Disabled"/> instead of throwing, so an exception means "could not check" (offline).
+        /// returns <see cref="LicenseStatus.NotFound"/> or <see cref="LicenseStatus.Disabled"/> instead of throwing, so an exception means "could not check" (offline).
         /// </summary>
         /// <exception cref="SendclapNetworkException"/>
-        public async Task<ValidateResult> ValidateAsync(string licenseKey, string? instanceId = null, CancellationToken ct = default)
-        {
-            try
-            {
-                var r = await t.SendAsync<ValidateResult>(HttpMethod.Post, "/licenses/validate", Body(licenseKey, instanceId), ct).ConfigureAwait(false);
-                return r with { Status = r.Valid ? LicenseStatus.Active : LicenseStatus.NotActivated };
-            }
-            catch (InvalidLicenseException)
-            {
-                return new ValidateResult { Valid = false, Status = LicenseStatus.Invalid };
-            }
-            catch (DisabledLicenseException)
-            {
-                return new ValidateResult { Valid = false, Status = LicenseStatus.Disabled };
-            }
-        }
+        public Task<ValidateResult> ValidateAsync(string licenseKey, string? instanceId = null, CancellationToken ct = default) =>
+            t.SendAsync<ValidateResult>(HttpMethod.Post, "/licenses/validate", Body(licenseKey, instanceId), ct);
 
         /// <summary>Releases an instance, freeing one activation.</summary>
         /// <exception cref="InvalidLicenseException"/>
@@ -243,7 +230,7 @@ namespace Sendclap
 
         public Task<Stats> MeAsync(CancellationToken ct = default) => Get<Stats>("/me", ct);
 
-        // Lists are pages, newest first. limit is 1 to 500 (the server defaults to 50 for payments, 500 otherwise); after is the
+        // Lists are pages, newest first. limit is 1 to 500 (the server defaults to 50); after is the
         // previous page's Next. The All...Async methods follow Next: await foreach (var p in api.AllPaymentsAsync(status: "paid")).
 
         public Task<Page<Payment>> ListPaymentsAsync(string? status = null, string? type = null, string? email = null, int? limit = null, long? after = null, CancellationToken ct = default) =>

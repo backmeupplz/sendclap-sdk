@@ -6,7 +6,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 current=$(sed -n 's/^  "version": "\(.*\)",$/\1/p' js/package.json | head -1)
-files="js/package.json js/src/index.ts python/pyproject.toml python/src/sendclap/__init__.py go/sendclap.go rust/Cargo.toml rust/src/lib.rs dotnet/src/Sendclap/Sendclap.csproj php/src/Http.php"
+files="js/package.json js/src/index.ts python/pyproject.toml python/src/sendclap/__init__.py go/sendclap.go rust/Cargo.toml rust/src/lib.rs dotnet/src/Sendclap/Sendclap.csproj dotnet/src/Sendclap/Sendclap.cs php/src/Http.php"
 case "${1:-}" in
   "") echo "$current" ;;
   check)

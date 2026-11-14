@@ -35,19 +35,19 @@ namespace Sendclap
         Active,
         /// <summary>The key exists but this instance is not activated on it.</summary>
         NotActivated,
-        /// <summary>The key does not exist.</summary>
-        Invalid,
         /// <summary>The key exists but was disabled after a refund or dispute.</summary>
         Disabled,
+        /// <summary>The key does not exist.</summary>
+        NotFound,
     }
 
     public sealed record ValidateResult
     {
         public bool Valid { get; init; }
-        [JsonIgnore] public LicenseStatus Status { get; init; }
-        /// <summary>Null when <see cref="Status"/> is <see cref="LicenseStatus.Invalid"/> or <see cref="LicenseStatus.Disabled"/>.</summary>
+        public LicenseStatus Status { get; init; }
+        /// <summary>Null when <see cref="Status"/> is <see cref="LicenseStatus.NotFound"/> or <see cref="LicenseStatus.Disabled"/>.</summary>
         public LicenseInfo? License { get; init; }
-        /// <summary>Null when <see cref="Status"/> is <see cref="LicenseStatus.Invalid"/> or <see cref="LicenseStatus.Disabled"/>.</summary>
+        /// <summary>Null when <see cref="Status"/> is <see cref="LicenseStatus.NotFound"/> or <see cref="LicenseStatus.Disabled"/>.</summary>
         public ProductRef? Product { get; init; }
     }
 
@@ -87,6 +87,8 @@ namespace Sendclap
         public string? Email { get; init; }
         /// <summary>Where to send the customer to pay.</summary>
         public string Url { get; init; } = "";
+        /// <summary>ISO 8601 time it was paid, null while unpaid.</summary>
+        public string? PaidAt { get; init; }
     }
 
     /// <summary>One page of a list, newest first. When <see cref="HasMore"/> is true, pass <see cref="Next"/> as <c>after</c> for the following page.</summary>

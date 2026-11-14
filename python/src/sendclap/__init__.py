@@ -9,7 +9,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Generic, Iterator, List, Optional, TypedDict, TypeVar
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 DEFAULT_BASE_URL = "https://sendclap.com"
 USER_AGENT = f"sendclap-python/{__version__}"
 
@@ -93,7 +93,7 @@ class ActivateResult:
 @dataclass(frozen=True)
 class ValidateResult:
     valid: bool
-    status: str  # "active", "not_activated", "invalid" (unknown key) or "disabled" (refunded or disputed)
+    status: str  # "active", "not_activated", "disabled" (refunded or disputed) or "not_found" (unknown key)
     license: Optional[LicenseInfo] = None
     product: Optional[ProductRef] = None
 
@@ -115,6 +115,7 @@ class Checkout(TypedDict):
     method: str
     email: Optional[str]
     url: str  # where to send the customer to pay
+    paid_at: Optional[str]  # ISO 8601 time it was paid, None while unpaid
 
 
 T = TypeVar("T")
@@ -325,16 +326,11 @@ class LicenseClient:
         return ActivateResult(instance_id=d["instance_id"], license=_license(d), product=_product(d))
 
     def validate(self, license_key: str, instance_id: Optional[str] = None) -> ValidateResult:
-        """Never raises for a bad key: returns status "invalid" or "disabled". Raises NetworkError when offline."""
-        try:
-            d = self._post("validate", license_key, instance_id)
-        except InvalidLicenseError:
-            return ValidateResult(valid=False, status="invalid")
-        except DisabledLicenseError:
-            return ValidateResult(valid=False, status="disabled")
-        valid = d.get("valid") is True
-        return ValidateResult(valid=valid, status="active" if valid else "not_activated",
-                              license=_license(d), product=_product(d))
+        """Never raises for a bad key: returns status "not_found" or "disabled". Raises NetworkError when offline."""
+        d = self._post("validate", license_key, instance_id)
+        known = "license" in d
+        return ValidateResult(valid=d.get("valid") is True, status=d["status"],
+                              license=_license(d) if known else None, product=_product(d) if known else None)
 
     def deactivate(self, license_key: str, instance_id: str) -> DeactivateResult:
         d = self._post("deactivate", license_key, instance_id)
@@ -378,7 +374,7 @@ class ApiClient:
         d = self._http.request("GET", path, query=query)
         return Page(data=d["data"], has_more=d["has_more"], next=d["next"])
 
-    # Lists are pages: `limit` is at most 500, `after` is the previous page's `next`. The all_* generators follow `next`.
+    # Lists are pages: `limit` defaults to 50 and is at most 500, `after` is the previous page's `next`. The all_* generators follow `next`.
     def list_payments(self, status: Optional[str] = None, type: Optional[str] = None, email: Optional[str] = None,
                       limit: Optional[int] = None, after: Optional[int] = None) -> Page[Payment]:
         return self._page("/payments", {"status": status, "type": type, "email": email, "limit": limit, "after": after})

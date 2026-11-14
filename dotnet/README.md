@@ -22,14 +22,14 @@ await licenses.ActivateAsync(key, instance); // once, when the key is entered
 try {
     var r = await licenses.ValidateAsync(key, instance);
     if (r.Valid) settings.LicenseCheckedAt = DateTime.UtcNow;
-    else if (r.Status == LicenseStatus.Disabled) Lock("This license was refunded."); // Invalid, Disabled or NotActivated
+    else if (r.Status == LicenseStatus.Disabled) Lock("This license was refunded."); // NotFound, Disabled or NotActivated
     else Lock("Invalid license.");
 } catch (SendclapNetworkException) { // offline: accept the last good check for 7 days
     if (DateTime.UtcNow - settings.LicenseCheckedAt > TimeSpan.FromDays(7)) Lock("Could not verify the license.");
 }
 ```
 
-`ValidateAsync` returns `Invalid` for an unknown key and `Disabled` for a refunded or disputed one, and `ActivateAsync` throws `DisabledLicenseException` for the latter. `DeactivateAsync(key, instance)` frees the seat, for example from a "Sign out of this computer" button, and throws `InstanceNotFoundException` if that instance wasn't activated.
+`ValidateAsync` returns `NotFound` for an unknown key and `Disabled` for a refunded or disputed one, and `ActivateAsync` throws `DisabledLicenseException` for the latter. `DeactivateAsync(key, instance)` frees the seat, for example from a "Sign out of this computer" button, and throws `InstanceNotFoundException` if that instance wasn't activated.
 
 `LicenseClient.InstanceName()` returns `Environment.MachineName`. It is sent to Sendclap and shown to the creator, and two machines with the same name share one activation, so pass your own stable id (such as a `Guid` saved on first run) if that matters. The instance id Sendclap returns is the name you pass (up to 200 characters).
 
@@ -49,7 +49,7 @@ await foreach (var p in api.AllPaymentsAsync(status: "paid")) // follows Next ac
     Console.WriteLine($"{p.Id} {p.Amount}");
 ```
 
-Lists return a `Page<T>` (`Data`, `HasMore`, `Next`), newest first; `limit` is at most 500 and `after` is the previous page's `Next`. `AllPaymentsAsync`, `AllMembersAsync`, `AllLicensesAsync` and `AllDisputesAsync` return an `IAsyncEnumerable<T>` and take a `CancellationToken`.
+Lists return a `Page<T>` (`Data`, `HasMore`, `Next`), newest first; `limit` defaults to 50 and is at most 500 and `after` is the previous page's `Next`. `AllPaymentsAsync`, `AllMembersAsync`, `AllLicensesAsync` and `AllDisputesAsync` return an `IAsyncEnumerable<T>` and take a `CancellationToken`.
 
 Also: `MeAsync`, `GetPaymentAsync(id)`, `ListPaymentsAsync(status, type, email, limit, after)`, `ListMembersAsync(limit, after)`, `ListLicensesAsync(email, limit, after)`, `ListDisputesAsync(limit, after)`, `ListProductsAsync`, `ListMembershipsAsync` and the public `GetCreatorAsync(handle)`, which works with a null key. Both clients take `baseUrl`, `timeout` (default 15 s) and an `HttpClient` to share; every method takes a `CancellationToken`.
 

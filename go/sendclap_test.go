@@ -21,7 +21,7 @@ func mock(t *testing.T) *httptest.Server {
 			w.WriteHeader(status)
 			io.WriteString(w, body)
 		}
-		if ua := r.Header.Get("User-Agent"); ua != "sendclap-go/0.2.0" {
+		if ua := r.Header.Get("User-Agent"); ua != "sendclap-go/0.3.0" {
 			t.Errorf("user agent %q", ua)
 		}
 		if action, ok := strings.CutPrefix(r.URL.Path, "/api/v1/licenses/"); ok {
@@ -34,18 +34,23 @@ func mock(t *testing.T) *httptest.Server {
 			}
 			json.NewDecoder(r.Body).Decode(&b)
 			switch {
-			case b.Key == "BAD":
-				send(404, `{"valid":false,"error":"license key not found","code":"license_not_found"}`)
-			case b.Key == "REFUNDED":
-				send(403, `{"valid":false,"error":"this license key is disabled","code":"license_disabled"}`)
+			case action == "validate" && b.Key == "BAD":
+				send(200, `{"valid":false,"status":"not_found"}`)
+			case action == "validate" && b.Key == "REFUNDED":
+				send(200, `{"valid":false,"status":"disabled"}`)
 			case action == "validate":
-				send(200, fmt.Sprintf(`{"valid":%t,%s}`, b.Instance == "" || b.Instance == "dev-1", lic))
+				ok := b.Instance == "" || b.Instance == "dev-1"
+				send(200, fmt.Sprintf(`{"valid":%t,"status":%q,%s}`, ok, map[bool]string{true: "active", false: "not_activated"}[ok], lic))
+			case b.Key == "BAD":
+				send(404, `{"error":"license key not found","code":"license_not_found"}`)
+			case b.Key == "REFUNDED":
+				send(403, `{"error":"this license key is disabled","code":"license_disabled"}`)
 			case b.Instance == "":
 				send(400, `{"error":"instance_id is required","code":"bad_request"}`)
 			case action == "deactivate" && b.Instance != "dev-1":
-				send(404, `{"deactivated":false,"error":"that instance is not activated","code":"instance_not_found",`+lic+`}`)
+				send(404, `{"error":"that instance is not activated","code":"instance_not_found"}`)
 			case action == "activate" && b.Key == "FULL":
-				send(409, `{"activated":false,"error":"activation limit reached","code":"activation_limit","license":{"key":"FULL","activations":3,"max_activations":3},"product":{"id":1,"name":"Pro"}}`)
+				send(409, `{"error":"activation limit reached","code":"activation_limit","license":{"key":"FULL","activations":3,"max_activations":3},"product":{"id":1,"name":"Pro"}}`)
 			case action == "activate":
 				send(200, fmt.Sprintf(`{"activated":true,"instance_id":%q,%s}`, b.Instance, lic))
 			case action == "deactivate":
@@ -76,9 +81,9 @@ func mock(t *testing.T) *httptest.Server {
 			if string(body) != `{"type":"product","product_id":1,"email":"b@x.com"}` {
 				t.Errorf("checkout body %s", body)
 			}
-			send(201, `{"id":"0xabc","status":"pending","type":"product","amount":29,"currency":"usd","method":"card","email":"b@x.com","url":"https://sendclap.com/checkout/0xabc"}`)
+			send(201, `{"id":"0xabc","status":"pending","type":"product","amount":29,"currency":"usd","method":"card","email":"b@x.com","url":"https://sendclap.com/checkout/0xabc","paid_at":null}`)
 		case "GET /api/v1/checkouts/0xabc":
-			send(200, `{"id":"0xabc","status":"paid","type":"product","amount":29,"currency":"usd","method":"card","email":null,"url":"https://sendclap.com/checkout/0xabc"}`)
+			send(200, `{"id":"0xabc","status":"paid","type":"product","amount":29,"currency":"usd","method":"card","email":null,"url":"https://sendclap.com/checkout/0xabc","paid_at":"2026-11-14T10:00:00.000Z"}`)
 		case "GET /api/v1/me":
 			send(200, `{"handle":"demo","last_30_days":{"payments":2,"gross":58,"fees":0.58,"net":57.42},"all_time":{"payments":2,"gross":58,"fees":0.58,"net":57.42},"members":{"active":1,"monthly_recurring":5},"open_disputes":0}`)
 		case "GET /api/v1/payments":
@@ -136,7 +141,7 @@ func TestLicense(t *testing.T) {
 		}
 	}
 	v, err := l.Validate(ctx, "BAD", "dev-1")
-	if err != nil || v.Valid || v.Status != StatusInvalid || v.License != nil {
+	if err != nil || v.Valid || v.Status != StatusNotFound || v.License != nil {
 		t.Fatalf("validate BAD: %+v %v", v, err)
 	}
 	v, err = l.Validate(ctx, "REFUNDED", "dev-1")
@@ -191,7 +196,10 @@ func TestAPI(t *testing.T) {
 	if err != nil || c.ID != "0xabc" || c.URL == "" || c.Amount != 29 {
 		t.Fatalf("create checkout %+v %v", c, err)
 	}
-	if c, err = a.GetCheckout(ctx, "0xabc"); err != nil || c.Status != "paid" || c.Email != "" || c.URL != "https://sendclap.com/checkout/0xabc" {
+	if c.PaidAt != nil {
+		t.Fatalf("unpaid checkout has paid_at %v", *c.PaidAt)
+	}
+	if c, err = a.GetCheckout(ctx, "0xabc"); err != nil || c.Status != "paid" || c.Email != "" || c.PaidAt == nil || *c.PaidAt != "2026-11-14T10:00:00.000Z" || c.URL != "https://sendclap.com/checkout/0xabc" {
 		t.Fatalf("get checkout %+v %v", c, err)
 	}
 	if s, err := a.Me(ctx); err != nil || s.Last30Days.Net != 57.42 || s.Members.Active != 1 {

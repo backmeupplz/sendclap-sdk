@@ -14,7 +14,7 @@ sealed class MockServer : HttpMessageHandler
     public TimeSpan Delay = TimeSpan.Zero;
 
     const string Meta = "\"license\":{\"key\":\"GOOD\",\"activations\":1,\"max_activations\":3},\"product\":{\"id\":1,\"name\":\"Pro\"}";
-    const string CheckoutJson = "{\"id\":\"0xabc\",\"status\":\"pending\",\"type\":\"product\",\"amount\":29,\"currency\":\"usd\",\"method\":\"card\",\"email\":\"b@example.com\",\"url\":\"https://sendclap.com/checkout/0xabc\"";
+    const string CheckoutJson = "{\"id\":\"0xabc\",\"status\":\"pending\",\"type\":\"product\",\"amount\":29,\"currency\":\"usd\",\"method\":\"card\",\"email\":\"b@example.com\",\"url\":\"https://sendclap.com/checkout/0xabc\",\"paid_at\":null";
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage req, CancellationToken ct)
     {
@@ -39,15 +39,21 @@ sealed class MockServer : HttpMessageHandler
             var b = JsonDocument.Parse(LastBody!).RootElement;
             var key = b.GetProperty("license_key").GetString();
             var instance = b.TryGetProperty("instance_id", out var i) ? i.GetString() : null;
-            if (key == "REFUNDED") return (403, "{\"valid\":false,\"error\":\"this license key is disabled\",\"code\":\"license_disabled\"}");
-            if (key != "GOOD" && key != "FULL") return (404, "{\"valid\":false,\"error\":\"license key not found\",\"code\":\"license_not_found\"}");
             var action = path.Substring("/api/v1/licenses/".Length);
-            if (action == "validate") return (200, $"{{\"valid\":{(instance == null || instance == "dev-1" ? "true" : "false")},{Meta}}}");
+            if (action == "validate")
+            {
+                if (key == "REFUNDED") return (200, "{\"valid\":false,\"status\":\"disabled\"}");
+                if (key != "GOOD" && key != "FULL") return (200, "{\"valid\":false,\"status\":\"not_found\"}");
+                var ok = instance == null || instance == "dev-1";
+                return (200, $"{{\"valid\":{(ok ? "true" : "false")},\"status\":\"{(ok ? "active" : "not_activated")}\",{Meta}}}");
+            }
+            if (key == "REFUNDED") return (403, "{\"error\":\"this license key is disabled\",\"code\":\"license_disabled\"}");
+            if (key != "GOOD" && key != "FULL") return (404, "{\"error\":\"license key not found\",\"code\":\"license_not_found\"}");
             if (instance == null) return (400, "{\"error\":\"instance_id is required\",\"code\":\"bad_request\"}");
             if (action == "deactivate" && instance != "dev-1")
-                return (404, $"{{\"deactivated\":false,\"error\":\"that instance is not activated\",\"code\":\"instance_not_found\",{Meta}}}");
+                return (404, $"{{\"error\":\"that instance is not activated\",\"code\":\"instance_not_found\"}}");
             if (action == "activate" && key == "FULL")
-                return (409, "{\"activated\":false,\"error\":\"activation limit reached\",\"code\":\"activation_limit\",\"license\":{\"key\":\"FULL\",\"activations\":3,\"max_activations\":3},\"product\":{\"id\":1,\"name\":\"Pro\"}}");
+                return (409, "{\"error\":\"activation limit reached\",\"code\":\"activation_limit\",\"license\":{\"key\":\"FULL\",\"activations\":3,\"max_activations\":3},\"product\":{\"id\":1,\"name\":\"Pro\"}}");
             if (action == "activate") return (200, $"{{\"activated\":true,\"instance_id\":\"{instance}\",{Meta}}}");
             return (200, $"{{\"deactivated\":true,{Meta.Replace("\"activations\":1", "\"activations\":0")}}}");
         }
@@ -59,6 +65,7 @@ sealed class MockServer : HttpMessageHandler
         {
             ("POST", "/api/v1/checkouts") => (201, CheckoutJson + "}"),
             ("GET", "/api/v1/checkouts/0xabc") => (200, CheckoutJson + "}"),
+            ("GET", "/api/v1/checkouts/0xpaid") => (200, CheckoutJson.Replace("\"paid_at\":null", "\"paid_at\":\"2026-11-14T10:00:00.000Z\"") + "}"),
             ("GET", "/api/v1/me") => (200, "{\"handle\":\"demo\",\"name\":\"Ada\",\"url\":\"u\",\"currency\":\"usd\",\"last_30_days\":{\"payments\":2,\"gross\":58,\"fees\":0.58,\"net\":57.42},\"all_time\":{\"payments\":3,\"gross\":87,\"fees\":0.87,\"net\":86.13},\"members\":{\"active\":1,\"monthly_recurring\":5},\"open_disputes\":0}"),
             // two pages, the reference echoes the query so tests can check it
             ("GET", "/api/v1/payments") when !query.Contains("after=") => (200, $"{{\"data\":[{PaymentJson(42, query)},{PaymentJson(41, query)}],\"has_more\":true,\"next\":41}}"),
@@ -87,7 +94,7 @@ public class LicenseClientTests
         Assert.Equal(1, r.Product.Id);
         Assert.Equal("http://mock.test/api/v1/licenses/activate", server.Last!.RequestUri!.ToString());
         Assert.Equal("{\"license_key\":\"GOOD\",\"instance_id\":\"dev-1\"}", server.LastBody);
-        Assert.Equal("sendclap-dotnet/0.2.0", server.Last.Headers.UserAgent.ToString());
+        Assert.Equal("sendclap-dotnet/0.3.0", server.Last.Headers.UserAgent.ToString());
         Assert.Null(server.Last.Headers.Authorization);
     }
 
@@ -142,7 +149,7 @@ public class LicenseClientTests
 
         var bad = await c.ValidateAsync("BAD", "dev-1");
         Assert.False(bad.Valid);
-        Assert.Equal(LicenseStatus.Invalid, bad.Status);
+        Assert.Equal(LicenseStatus.NotFound, bad.Status);
         Assert.Null(bad.License);
 
         var refunded = await c.ValidateAsync("REFUNDED", "dev-1");
@@ -212,7 +219,7 @@ public class ApiClientTests
         Assert.Equal("https://sendclap.com/checkout/0xabc", c.Url);
         Assert.Equal("{\"type\":\"product\",\"product_id\":1,\"email\":\"b@example.com\"}", server.LastBody);
         Assert.Equal("Bearer sc_test", server.Last!.Headers.Authorization!.ToString());
-        Assert.Equal("sendclap-dotnet/0.2.0", server.Last.Headers.UserAgent.ToString());
+        Assert.Equal("sendclap-dotnet/0.3.0", server.Last.Headers.UserAgent.ToString());
     }
 
     [Fact]
@@ -220,6 +227,8 @@ public class ApiClientTests
     {
         var c = await Client().GetCheckoutAsync("0xabc");
         Assert.Equal("pending", c.Status);
+        Assert.Null(c.PaidAt);
+        Assert.Equal("2026-11-14T10:00:00.000Z", (await Client().GetCheckoutAsync("0xpaid")).PaidAt);
         Assert.Equal("https://sendclap.com/checkout/0xabc", c.Url);
         Assert.Equal(HttpMethod.Get, server.Last!.Method);
     }

@@ -25,7 +25,7 @@ impl Req {
 
 /// Canned Sendclap answers; a failed expectation answers 418 so the client call fails the test.
 fn route(r: &Req) -> (u16, String) {
-    if r.header("user-agent") != "sendclap-rust/0.2.0" {
+    if r.header("user-agent") != "sendclap-rust/0.3.0" {
         return (418, "{}".into());
     }
     if let Some(action) = r.target.strip_prefix("/api/v1/licenses/") {
@@ -38,12 +38,17 @@ fn route(r: &Req) -> (u16, String) {
             b["instance_id"].as_str().unwrap_or(""),
         );
         return match (action, key) {
-            (_, "BAD") => (404, r#"{"valid":false,"error":"license key not found","code":"license_not_found"}"#.into()),
-            (_, "REFUNDED") => (403, r#"{"valid":false,"error":"this license key is disabled","code":"license_disabled"}"#.into()),
-            ("validate", _) => (200, format!(r#"{{"valid":{},{LIC}}}"#, inst.is_empty() || inst == "dev-1")),
+            ("validate", "BAD") => (200, r#"{"valid":false,"status":"not_found"}"#.into()),
+            ("validate", "REFUNDED") => (200, r#"{"valid":false,"status":"disabled"}"#.into()),
+            ("validate", _) => {
+                let ok = inst.is_empty() || inst == "dev-1";
+                (200, format!(r#"{{"valid":{ok},"status":"{}",{LIC}}}"#, if ok { "active" } else { "not_activated" }))
+            }
+            (_, "BAD") => (404, r#"{"error":"license key not found","code":"license_not_found"}"#.into()),
+            (_, "REFUNDED") => (403, r#"{"error":"this license key is disabled","code":"license_disabled"}"#.into()),
             _ if inst.is_empty() => (400, r#"{"error":"instance_id is required","code":"bad_request"}"#.into()),
-            ("deactivate", _) if inst != "dev-1" => (404, format!(r#"{{"deactivated":false,"error":"that instance is not activated","code":"instance_not_found",{LIC}}}"#)),
-            ("activate", "FULL") => (409, r#"{"activated":false,"error":"activation limit reached","code":"activation_limit","license":{"key":"FULL","activations":3,"max_activations":3},"product":{"id":1,"name":"Pro"}}"#.into()),
+            ("deactivate", _) if inst != "dev-1" => (404, r#"{"error":"that instance is not activated","code":"instance_not_found"}"#.into()),
+            ("activate", "FULL") => (409, r#"{"error":"activation limit reached","code":"activation_limit","license":{"key":"FULL","activations":3,"max_activations":3},"product":{"id":1,"name":"Pro"}}"#.into()),
             ("activate", _) => (200, format!(r#"{{"activated":true,"instance_id":"{inst}",{LIC}}}"#)),
             _ => (200, r#"{"deactivated":true,"license":{"key":"GOOD","activations":0,"max_activations":3},"product":{"id":null}}"#.into()),
         };
@@ -64,8 +69,8 @@ fn route(r: &Req) -> (u16, String) {
         );
     }
     match (r.method.as_str(), r.target.as_str()) {
-        ("POST", "/api/v1/checkouts") if r.body == r#"{"email":"b@x.com","product_id":1,"type":"product"}"# => (201, r#"{"id":"0xabc","status":"pending","type":"product","amount":29,"currency":"usd","method":"card","email":"b@x.com","url":"https://sendclap.com/checkout/0xabc"}"#.into()),
-        ("GET", "/api/v1/checkouts/0xabc") => (200, r#"{"id":"0xabc","status":"paid","type":"product","amount":29,"currency":"usd","method":"card","email":null,"url":"https://sendclap.com/checkout/0xabc"}"#.into()),
+        ("POST", "/api/v1/checkouts") if r.body == r#"{"email":"b@x.com","product_id":1,"type":"product"}"# => (201, r#"{"id":"0xabc","status":"pending","type":"product","amount":29,"currency":"usd","method":"card","email":"b@x.com","url":"https://sendclap.com/checkout/0xabc","paid_at":null}"#.into()),
+        ("GET", "/api/v1/checkouts/0xabc") => (200, r#"{"id":"0xabc","status":"paid","type":"product","amount":29,"currency":"usd","method":"card","email":null,"url":"https://sendclap.com/checkout/0xabc","paid_at":"2026-11-14T10:00:00.000Z"}"#.into()),
         ("GET", "/api/v1/me") => (200, r#"{"handle":"demo","name":"Ada","url":"u","currency":"usd","last_30_days":{"payments":2,"gross":58,"fees":0.58,"net":57.42},"all_time":{"payments":2,"gross":58,"fees":0.58,"net":57.42},"members":{"active":1,"monthly_recurring":5},"open_disputes":0}"#.into()),
         // two per page, newest first, cursor = the last id on the page
         ("GET", "/api/v1/payments?status=paid&limit=2") => (200, format!(r#"{{"data":[{{{PAYMENT}}},{{{}}}],"has_more":true,"next":41}}"#, PAYMENT.replace("42", "41"))),
@@ -156,7 +161,7 @@ fn license_success() {
     let v = l.validate("BAD", Some("dev-1")).unwrap();
     assert_eq!(
         (v.valid, v.status, v.license),
-        (false, ValidationStatus::Invalid, None)
+        (false, ValidationStatus::NotFound, None)
     );
     let v = l.validate("REFUNDED", Some("dev-1")).unwrap();
     assert_eq!(
@@ -239,10 +244,11 @@ fn api() {
         (c.id.as_str(), c.amount, c.url.as_str()),
         ("0xabc", 29.0, "https://sendclap.com/checkout/0xabc")
     );
+    assert_eq!(c.paid_at, None);
     let c = a.get_checkout("0xabc").unwrap();
     assert_eq!(
-        (c.status.as_str(), c.email, c.url.as_str()),
-        ("paid", None, "https://sendclap.com/checkout/0xabc")
+        (c.status.as_str(), c.email, c.url.as_str(), c.paid_at.as_deref()),
+        ("paid", None, "https://sendclap.com/checkout/0xabc", Some("2026-11-14T10:00:00.000Z"))
     );
     let s = a.me().unwrap();
     assert_eq!((s.last_30_days.net, s.members.active), (57.42, 1));

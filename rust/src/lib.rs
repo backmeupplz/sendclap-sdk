@@ -9,7 +9,7 @@ use std::time::Duration;
 mod api;
 pub use api::*;
 
-pub const VERSION: &str = "0.2.0";
+pub const VERSION: &str = "0.3.0";
 pub const DEFAULT_BASE_URL: &str = "https://sendclap.com";
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -210,17 +210,17 @@ pub enum ValidationStatus {
     Active,
     /// The key exists but this instance is not activated.
     NotActivated,
-    /// The key is unknown.
-    Invalid,
     /// The key was disabled after a refund or dispute.
     Disabled,
+    /// The key is unknown.
+    NotFound,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ValidateResult {
     pub valid: bool,
     pub status: ValidationStatus,
-    /// `None` when status is `Invalid` or `Disabled`.
+    /// `None` when status is `NotFound` or `Disabled`.
     pub license: Option<LicenseInfo>,
     pub product: Option<ProductRef>,
 }
@@ -267,39 +267,9 @@ impl LicenseClient {
     }
 
     /// Checks a key, and with an instance id that the instance is activated. An unknown or disabled
-    /// key is `Ok` with status `Invalid` or `Disabled`; `Err` means the answer is unknown (e.g. offline).
+    /// key is `Ok` with status `NotFound` or `Disabled`; `Err` means the answer is unknown (e.g. offline).
     pub fn validate(&self, license_key: &str, instance_id: Option<&str>) -> Result<ValidateResult> {
-        #[derive(Deserialize)]
-        struct Raw {
-            valid: bool,
-            license: LicenseInfo,
-            product: ProductRef,
-        }
-        match self.call::<Raw>("validate", license_key, instance_id) {
-            Ok(r) => Ok(ValidateResult {
-                valid: r.valid,
-                status: if r.valid {
-                    ValidationStatus::Active
-                } else {
-                    ValidationStatus::NotActivated
-                },
-                license: Some(r.license),
-                product: Some(r.product),
-            }),
-            Err(e @ (Error::InvalidLicense { .. } | Error::LicenseDisabled { .. })) => {
-                Ok(ValidateResult {
-                    valid: false,
-                    status: if matches!(e, Error::InvalidLicense { .. }) {
-                        ValidationStatus::Invalid
-                    } else {
-                        ValidationStatus::Disabled
-                    },
-                    license: None,
-                    product: None,
-                })
-            }
-            Err(e) => Err(e),
-        }
+        self.call("validate", license_key, instance_id)
     }
 
     /// Releases an instance, freeing one activation. `Error::InstanceNotFound` if it wasn't activated.

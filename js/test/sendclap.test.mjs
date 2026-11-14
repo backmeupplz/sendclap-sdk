@@ -6,7 +6,8 @@ import * as cjs from '../dist/cjs/index.js'
 
 const license = (activations = 1) => ({ key: 'GOOD', activations, max_activations: 3 })
 const product = { id: 1, name: 'Pro' }
-const checkout = { id: '0xabc', status: 'pending', type: 'product', amount: 29, currency: 'usd', method: 'card', email: 'a@b.co', url: 'https://sendclap.com/checkout/0xabc' }
+const checkout = { id: '0xabc', status: 'pending', type: 'product', amount: 29, currency: 'usd', method: 'card', email: 'a@b.co', url: 'https://sendclap.com/checkout/0xabc', paid_at: null }
+const paidCheckout = { ...checkout, status: 'paid', paid_at: '2026-11-14T10:00:00.000Z' }
 const payments = [{ id: 3, status: 'paid' }, { id: 2, status: 'paid' }, { id: 1, status: 'paid' }]
 let last // the last request the mock saw
 
@@ -23,19 +24,25 @@ const server = createServer(async (req, res) => {
   const lic = p.match(/^\/api\/v1\/licenses\/(\w+)$/)
   if (lic) {
     const action = lic[1], { license_key: key, instance_id: inst } = body
-    if (key === 'REFUNDED') return fail(403, 'license_disabled', 'this license key is disabled', { valid: false })
-    if (key !== 'GOOD' && key !== 'FULL') return fail(404, 'license_not_found', 'license key not found', { valid: false })
-    if (action === 'validate') return send(200, { valid: !inst || inst === 'dev-1', license: license(), product })
+    if (action === 'validate') {
+      if (key === 'REFUNDED') return send(200, { valid: false, status: 'disabled' })
+      if (key !== 'GOOD' && key !== 'FULL') return send(200, { valid: false, status: 'not_found' })
+      const ok = !inst || inst === 'dev-1'
+      return send(200, { valid: ok, status: ok ? 'active' : 'not_activated', license: license(), product })
+    }
+    if (key === 'REFUNDED') return fail(403, 'license_disabled', 'this license key is disabled')
+    if (key !== 'GOOD' && key !== 'FULL') return fail(404, 'license_not_found', 'license key not found')
     if (!inst) return fail(400, 'bad_request', 'instance_id is required')
-    if (action === 'activate' && key === 'FULL') return fail(409, 'activation_limit', 'activation limit reached', { activated: false, license: license(3), product })
+    if (action === 'activate' && key === 'FULL') return fail(409, 'activation_limit', 'activation limit reached', { license: license(3), product })
     if (action === 'activate') return send(200, { activated: true, instance_id: inst, license: license(), product })
-    if (inst !== 'dev-1') return fail(404, 'instance_not_found', 'that instance is not activated', { deactivated: false, license: license(), product })
+    if (inst !== 'dev-1') return fail(404, 'instance_not_found', 'that instance is not activated')
     return send(200, { deactivated: true, license: license(0), product })
   }
   if (p === '/api/v1/creators/demo') return send(200, { handle: 'demo', name: 'Ada' })
   if (req.headers.authorization !== 'Bearer sc_test') return fail(401, 'invalid_api_key', 'invalid API key')
   if (p === '/api/v1/checkouts' && req.method === 'POST') return send(201, checkout)
   if (p === '/api/v1/checkouts/0xabc') return send(200, checkout)
+  if (p === '/api/v1/checkouts/0xpaid') return send(200, paidCheckout)
   if (p === '/api/v1/payments') { // two per page, newest first, cursor = the last id on the page
     const after = Number(url.searchParams.get('after')) || Infinity, rows = payments.filter(r => r.id < after)
     const data = rows.slice(0, 2), more = rows.length > 2
@@ -60,7 +67,7 @@ test('activate returns the instance and license', async () => {
   const r = await licenses().activate('GOOD', 'dev-1')
   assert.deepEqual(r, { instance_id: 'dev-1', license: license(), product })
   assert.deepEqual(last.body, { license_key: 'GOOD', instance_id: 'dev-1' })
-  assert.equal(last.headers['user-agent'], 'sendclap-js/0.2.0')
+  assert.equal(last.headers['user-agent'], 'sendclap-js/0.3.0')
   assert.equal(last.headers['x-sendclap-client'], undefined)
   assert.equal(last.headers['content-type'], 'application/json')
   assert.equal(last.headers.authorization, undefined)
@@ -71,7 +78,7 @@ test('in a browser the client sends x-sendclap-client instead of User-Agent', as
   try {
     await licenses().validate('GOOD')
   } finally { delete globalThis.document }
-  assert.equal(last.headers['x-sendclap-client'], 'sendclap-js/0.2.0')
+  assert.equal(last.headers['x-sendclap-client'], 'sendclap-js/0.3.0')
   assert.ok(!/sendclap/.test(last.headers['user-agent'] ?? ''))
 })
 
@@ -106,12 +113,12 @@ test('activate without an instance is a bad_request', async () => {
   assert.equal(e.message, 'instance_id is required')
 })
 
-test('validate: active, not activated, invalid and disabled', async () => {
+test('validate: active, not activated, not found and disabled', async () => {
   assert.deepEqual(await licenses().validate('GOOD', 'dev-1'), { valid: true, status: 'active', license: license(), product })
   assert.deepEqual(await licenses().validate('GOOD'), { valid: true, status: 'active', license: license(), product })
   assert.deepEqual(last.body, { license_key: 'GOOD' })
   assert.equal((await licenses().validate('GOOD', 'other')).status, 'not_activated')
-  assert.deepEqual(await licenses().validate('BAD', 'dev-1'), { valid: false, status: 'invalid' })
+  assert.deepEqual(await licenses().validate('BAD', 'dev-1'), { valid: false, status: 'not_found' })
   assert.deepEqual(await licenses().validate('REFUNDED', 'dev-1'), { valid: false, status: 'disabled' })
 })
 
@@ -151,6 +158,8 @@ test('createCheckout sends the key and body; getCheckout has the url', async () 
   const g = await api().getCheckout('0xabc')
   assert.equal(g.status, 'pending')
   assert.equal(g.url, 'https://sendclap.com/checkout/0xabc')
+  assert.equal(g.paid_at, null)
+  assert.equal((await api().getCheckout('0xpaid')).paid_at, '2026-11-14T10:00:00.000Z')
 })
 
 test('listPayments returns a Page and getPayment errors carry the code', async () => {

@@ -19,7 +19,7 @@ final class ApiClient
     }
 
     /** @param array{type: string, amount?: float|int, product_id?: int, tier_id?: int, email?: string, method?: string, message?: string} $params */
-    public function createCheckout(array $params): array
+    public function createCheckout(array $params): array // id, status, type, amount, currency, method, email, url, paid_at (ISO 8601 or null)
     {
         return $this->http->request('POST', '/checkouts', $params);
     }
@@ -34,7 +34,7 @@ final class ApiClient
         return $this->http->request('GET', '/me');
     }
 
-    // Lists are pages, newest first. `limit` is at most 500 and `after` is the previous page's `next`.
+    // Lists are pages, newest first. `limit` defaults to 50, at most 500, and `after` is the previous page's `next`.
     // The all*() generators follow `next`: foreach ($api->allPayments(['status' => 'paid']) as $payment).
 
     /** @param array{status?: string, type?: string, email?: string, limit?: int, after?: int} $filter */

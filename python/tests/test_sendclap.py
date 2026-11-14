@@ -10,13 +10,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import sendclap  # noqa: E402
 from sendclap import (  # noqa: E402
-    ActivationLimitError, ApiClient, InvalidLicenseError, LicenseClient, NetworkError, SendclapError,
+    ActivationLimitError, ApiClient, DisabledLicenseError, InstanceNotFoundError, InvalidLicenseError,
+    LicenseClient, NetworkError, SendclapError,
 )
 
 LICENSE = {"key": "GOOD", "activations": 1, "max_activations": 3}
 PRODUCT = {"id": 1, "name": "Pro"}
 CHECKOUT = {"id": "0xabc", "status": "pending", "type": "product", "amount": 29, "currency": "usd",
-            "method": "card", "email": "buyer@example.com"}
+            "method": "card", "email": "buyer@example.com", "url": "http://x/checkout/0xabc"}
+PAYMENTS = [{"id": 3, "status": "paid"}, {"id": 2, "status": "paid"}, {"id": 1, "status": "paid"}]
 SEEN = []  # (method, path, headers, body) of every request
 
 
@@ -40,32 +42,42 @@ class Mock(BaseHTTPRequestHandler):
         p = url.path
         if p.startswith("/api/v1/licenses/"):
             action, key, inst = p.rsplit("/", 1)[1], body.get("license_key"), body.get("instance_id")
+            if key == "REFUNDED":
+                return self.reply(403, {"valid": False, "error": "this license key is disabled", "code": "license_disabled"})
             if key != "GOOD" and key != "FULL":
-                return self.reply(404, {"valid": False, "error": "license key not found"})
+                return self.reply(404, {"valid": False, "error": "license key not found", "code": "license_not_found"})
             if action == "validate":
                 return self.reply(200, {"valid": inst in (None, "dev-1"), "license": LICENSE, "product": PRODUCT})
             if not inst:
-                return self.reply(400, {"error": "instance_id is required"})
+                return self.reply(400, {"error": "instance_id is required", "code": "bad_request"})
             if action == "activate" and key == "FULL":
-                return self.reply(409, {"activated": False, "error": "activation limit reached",
+                return self.reply(409, {"activated": False, "error": "activation limit reached", "code": "activation_limit",
                                         "license": {"key": "FULL", "activations": 3, "max_activations": 3}, "product": PRODUCT})
             if action == "activate":
                 return self.reply(200, {"activated": True, "instance_id": inst, "license": LICENSE, "product": PRODUCT})
+            if inst != "dev-1":
+                return self.reply(404, {"deactivated": False, "error": "that instance is not activated",
+                                        "code": "instance_not_found", "license": LICENSE, "product": PRODUCT})
             return self.reply(200, {"deactivated": True, "license": dict(LICENSE, activations=0), "product": PRODUCT})
         if p == "/api/v1/creators/demo":
             return self.reply(200, {"handle": "demo", "name": "Ada Builds"})
         if p.startswith("/api/v1/") and self.headers.get("Authorization") != "Bearer sc_test":
-            return self.reply(401, {"error": "invalid API key"})
+            return self.reply(401, {"error": "invalid API key", "code": "invalid_api_key"})
         if p == "/api/v1/checkouts" and method == "POST":
-            return self.reply(201, dict(CHECKOUT, url="http://x/checkout/0xabc"))
+            return self.reply(201, CHECKOUT)
         if p == "/api/v1/checkouts/0xabc":
             return self.reply(200, CHECKOUT)
-        if p == "/api/v1/payments":
-            return self.reply(200, [{"id": 42, "status": parse_qs(url.query)["status"][0]}])
+        if p == "/api/v1/payments":  # two per page, newest first, cursor = the last id on the page
+            after = int(parse_qs(url.query).get("after", ["1000"])[0])
+            rows = [r for r in PAYMENTS if r["id"] < after]
+            data, more = rows[:2], len(rows) > 2
+            return self.reply(200, {"data": data, "has_more": more, "next": data[-1]["id"] if more else None})
+        if p == "/api/v1/members":
+            return self.reply(200, {"data": [{"email": "a@b.co"}], "has_more": False, "next": None})
         if p == "/api/v1/payments/42":
             return self.reply(200, {"id": 42, "item": "Pro", "activity": []})
         if p == "/api/v1/payments/7":
-            return self.reply(404, {"error": "payment not found"})
+            return self.reply(404, {"error": "payment not found", "code": "not_found"})
         if p == "/api/v1/broken":
             return self.reply(200, "not json", "text/plain")
         return self.reply(404, "<html>Not found</html>", "text/html")
@@ -99,14 +111,14 @@ class SendclapTest(unittest.TestCase):
         method, path, headers, body = SEEN[-1]
         self.assertEqual((method, path), ("POST", "/api/v1/licenses/activate"))
         self.assertEqual(body, {"license_key": "GOOD", "instance_id": "dev-1"})
-        self.assertEqual(headers["User-Agent"], "sendclap-python/0.1.0")
+        self.assertEqual(headers["User-Agent"], "sendclap-python/0.2.0")
         self.assertEqual(headers["Content-Type"], "application/json")
         self.assertNotIn("Authorization", headers)
 
     def test_activate_limit(self):
         with self.assertRaises(ActivationLimitError) as cm:
             self.lic.activate("FULL", "dev-9")
-        self.assertEqual(cm.exception.status, 409)
+        self.assertEqual((cm.exception.status, cm.exception.code), (409, "activation_limit"))
         self.assertEqual(cm.exception.license.activations, 3)
         self.assertEqual(cm.exception.product.id, 1)
         self.assertEqual(str(cm.exception), "activation limit reached")
@@ -114,13 +126,19 @@ class SendclapTest(unittest.TestCase):
     def test_activate_invalid_key(self):
         with self.assertRaises(InvalidLicenseError) as cm:
             self.lic.activate("BAD", "dev-1")
-        self.assertEqual(cm.exception.status, 404)
+        self.assertEqual((cm.exception.status, cm.exception.code), (404, "license_not_found"))
         self.assertEqual(cm.exception.message, "license key not found")
+
+    def test_activate_disabled_key(self):
+        with self.assertRaises(DisabledLicenseError) as cm:
+            self.lic.activate("REFUNDED", "dev-1")
+        self.assertNotIsInstance(cm.exception, InvalidLicenseError)
+        self.assertEqual((cm.exception.status, cm.exception.code), (403, "license_disabled"))
 
     def test_activate_missing_instance(self):
         with self.assertRaises(SendclapError) as cm:
             self.lic.activate("GOOD", "")
-        self.assertEqual(cm.exception.status, 400)
+        self.assertEqual((cm.exception.status, cm.exception.code), (400, "bad_request"))
         self.assertEqual(cm.exception.message, "instance_id is required")
 
     def test_validate(self):
@@ -132,24 +150,29 @@ class SendclapTest(unittest.TestCase):
         self.assertEqual((r.valid, r.status, r.license.key), (False, "not_activated", "GOOD"))
         r = self.lic.validate("BAD", "dev-1")
         self.assertEqual((r.valid, r.status, r.license, r.product), (False, "invalid", None, None))
+        r = self.lic.validate("REFUNDED", "dev-1")
+        self.assertEqual((r.valid, r.status, r.license, r.product), (False, "disabled", None, None))
 
     def test_deactivate(self):
         r = self.lic.deactivate("GOOD", "dev-1")
         self.assertEqual(r.license.activations, 0)
         with self.assertRaises(InvalidLicenseError):
             self.lic.deactivate("BAD", "dev-1")
+        with self.assertRaises(InstanceNotFoundError) as cm:
+            self.lic.deactivate("GOOD", "nope")
+        self.assertEqual((cm.exception.status, cm.exception.code), (404, "instance_not_found"))
 
     def test_html_404_is_not_invalid_license(self):
         wrong = LicenseClient(base_url=self.base + "/nope")
         with self.assertRaises(SendclapError) as cm:
             wrong.validate("GOOD")
         self.assertNotIsInstance(cm.exception, InvalidLicenseError)
-        self.assertEqual((cm.exception.status, cm.exception.message), (404, "HTTP 404"))
+        self.assertEqual((cm.exception.status, cm.exception.message, cm.exception.code), (404, "HTTP 404", ""))
 
     def test_network_error(self):
         with self.assertRaises(NetworkError) as cm:
             LicenseClient(base_url="http://127.0.0.1:1", timeout=2).validate("GOOD")
-        self.assertEqual(cm.exception.status, 0)
+        self.assertEqual((cm.exception.status, cm.exception.code), (0, "network_error"))
 
     def test_invalid_json(self):
         with self.assertRaises(SendclapError) as cm:
@@ -162,20 +185,29 @@ class SendclapTest(unittest.TestCase):
         method, path, headers, body = SEEN[-1]
         self.assertEqual(body, {"type": "product", "product_id": 1, "email": "buyer@example.com"})
         self.assertEqual(headers["Authorization"], "Bearer sc_test")
-        self.assertEqual(self.api.get_checkout("0xabc")["status"], "pending")
+        g = self.api.get_checkout("0xabc")
+        self.assertEqual((g["status"], g["url"]), ("pending", "http://x/checkout/0xabc"))
 
-    def test_payments(self):
-        self.assertEqual(self.api.list_payments(status="paid", limit=2)[0]["status"], "paid")
+    def test_payments_page(self):
+        page = self.api.list_payments(status="paid", limit=2)
+        self.assertEqual((page.data, page.has_more, page.next), (PAYMENTS[:2], True, 2))
         self.assertEqual(SEEN[-1][1], "/api/v1/payments?status=paid&limit=2")
+        last = self.api.list_payments(after=page.next)
+        self.assertEqual((last.data, last.has_more, last.next), (PAYMENTS[2:], False, None))
         self.assertEqual(self.api.get_payment(42)["item"], "Pro")
         with self.assertRaises(SendclapError) as cm:
             self.api.get_payment(7)
-        self.assertEqual((cm.exception.status, cm.exception.message), (404, "payment not found"))
+        self.assertEqual((cm.exception.status, cm.exception.code, cm.exception.message), (404, "not_found", "payment not found"))
+
+    def test_all_payments_follows_next(self):
+        self.assertEqual([p["id"] for p in self.api.all_payments(status="paid")], [3, 2, 1])
+        self.assertEqual(SEEN[-1][1], "/api/v1/payments?status=paid&after=2")
+        self.assertEqual(len(list(self.api.all_members())), 1)
 
     def test_unauthorized(self):
         with self.assertRaises(SendclapError) as cm:
             ApiClient("sc_wrong", base_url=self.base).me()
-        self.assertEqual((cm.exception.status, cm.exception.message), (401, "invalid API key"))
+        self.assertEqual((cm.exception.status, cm.exception.code, cm.exception.message), (401, "invalid_api_key", "invalid API key"))
 
     def test_creator_without_key(self):
         self.assertEqual(ApiClient(base_url=self.base).get_creator("demo")["name"], "Ada Builds")

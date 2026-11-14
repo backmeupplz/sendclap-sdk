@@ -35,17 +35,19 @@ namespace Sendclap
         Active,
         /// <summary>The key exists but this instance is not activated on it.</summary>
         NotActivated,
-        /// <summary>The key does not exist, or it was disabled after a refund or dispute.</summary>
+        /// <summary>The key does not exist.</summary>
         Invalid,
+        /// <summary>The key exists but was disabled after a refund or dispute.</summary>
+        Disabled,
     }
 
     public sealed record ValidateResult
     {
         public bool Valid { get; init; }
         [JsonIgnore] public LicenseStatus Status { get; init; }
-        /// <summary>Null when <see cref="Status"/> is <see cref="LicenseStatus.Invalid"/>.</summary>
+        /// <summary>Null when <see cref="Status"/> is <see cref="LicenseStatus.Invalid"/> or <see cref="LicenseStatus.Disabled"/>.</summary>
         public LicenseInfo? License { get; init; }
-        /// <summary>Null when <see cref="Status"/> is <see cref="LicenseStatus.Invalid"/>.</summary>
+        /// <summary>Null when <see cref="Status"/> is <see cref="LicenseStatus.Invalid"/> or <see cref="LicenseStatus.Disabled"/>.</summary>
         public ProductRef? Product { get; init; }
     }
 
@@ -83,8 +85,16 @@ namespace Sendclap
         public string Currency { get; init; } = "";
         public string Method { get; init; } = "";
         public string? Email { get; init; }
-        /// <summary>Where to send the customer. Only returned when the checkout is created.</summary>
-        public string? Url { get; init; }
+        /// <summary>Where to send the customer to pay.</summary>
+        public string Url { get; init; } = "";
+    }
+
+    /// <summary>One page of a list, newest first. When <see cref="HasMore"/> is true, pass <see cref="Next"/> as <c>after</c> for the following page.</summary>
+    public sealed record Page<T>
+    {
+        public IReadOnlyList<T> Data { get; init; } = Array.Empty<T>();
+        public bool HasMore { get; init; }
+        public long? Next { get; init; }
     }
 
     public sealed record Totals

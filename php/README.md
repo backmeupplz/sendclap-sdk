@@ -18,21 +18,22 @@ function licensed(string $key, array &$cache): bool {
         return time() - ($cache['validated_at'] ?? 0) < 7 * 86400;
     }
     if ($r->valid) $cache['validated_at'] = time(); // persist $cache yourself
-    return $r->valid; // status "invalid" or "not_activated": lock the app
+    return $r->valid; // status "invalid", "disabled" (refunded or disputed) or "not_activated": lock the app
 }
 ```
 
 On first run, activate the device and remember the instance id:
 
 ```php
-use Sendclap\{ActivationLimitException, InvalidLicenseException, LicenseClient};
+use Sendclap\{ActivationLimitException, DisabledLicenseException, InvalidLicenseException, LicenseClient};
 try {
     $cache['instance'] = (new LicenseClient())->activate($key, LicenseClient::instanceName())->instanceId;
-} catch (InvalidLicenseException) { /* unknown key, or refunded / disputed */ }
+} catch (InvalidLicenseException) { /* unknown key */ }
+catch (DisabledLicenseException) { /* the payment was refunded or disputed */ }
 catch (ActivationLimitException $e) { echo "Used on {$e->license->activations}/{$e->license->maxActivations} devices"; }
 ```
 
-`deactivate($key, $instanceId)` frees the device again. `validate()` never throws for a bad key; it returns `status` `"active"`, `"not_activated"` or `"invalid"`, and throws `NetworkException` only when it could not reach Sendclap, so you can tell "offline" from "invalid".
+`deactivate($key, $instanceId)` frees the device again, and throws `InstanceNotFoundException` if it wasn't activated. `validate()` never throws for a bad key; it returns `status` `"active"`, `"not_activated"`, `"invalid"` (unknown key) or `"disabled"` (refunded or disputed), and throws `NetworkException` only when it could not reach Sendclap, so you can tell "offline" from "invalid".
 
 **Instance name:** `LicenseClient::instanceName()` is the machine's hostname. It is sent to Sendclap and shown to the creator, and two machines with the same hostname share one activation. If that matters, pass your own stable id instead (for example a random UUID saved on first run). The instance id Sendclap returns is the name you send.
 
@@ -47,19 +48,27 @@ $api = new ApiClient('sc_your_key'); // baseUrl: 'https://sendclap.com', timeout
 $checkout = $api->createCheckout(['type' => 'product', 'product_id' => 1, 'email' => 'buyer@example.com']);
 header('Location: ' . $checkout['url']);        // send the buyer here
 $api->getCheckout($checkout['id'])['status'];   // "pending" until "paid"
-foreach ($api->listPayments(['status' => 'paid', 'limit' => 10]) as $p) echo $p['amount'], ' ', $p['email'], "\n";
+$page = $api->listPayments(['status' => 'paid', 'limit' => 10]); // $page->data, $page->hasMore, $page->next
+if ($page->hasMore) $page = $api->listPayments(['status' => 'paid', 'limit' => 10, 'after' => $page->next]);
+foreach ($api->allPayments(['status' => 'paid']) as $p) echo $p['amount'], ' ', $p['email'], "\n"; // a generator that follows `next`
 ```
 
-Methods: `createCheckout`, `getCheckout`, `me`, `listPayments`, `getPayment`, `listMembers`, `listLicenses`, `listDisputes`, `listProducts`, `listMemberships`, `getCreator` (public, works with `new ApiClient()` and no key). They return the API's JSON as associative arrays with snake_case keys.
+Lists (`listPayments`, `listMembers`, `listLicenses`, `listDisputes`) take an array of filters plus `limit` (at most 500) and `after` (the previous page's `next`) and return a `Page` with `data`, `hasMore` and `next`, newest first. `allPayments`, `allMembers`, `allLicenses` and `allDisputes` take the same filters and are generators over every item.
+
+Methods: `createCheckout` and `getCheckout` (both return the checkout `url`), `me`, `getPayment`, `listProducts`, `listMemberships`, the list and `all*` methods above, `getCreator` (public, works with `new ApiClient()` and no key). Items are the API's JSON as associative arrays with snake_case keys.
 
 ## Errors
 
-| Exception | When |
-|---|---|
-| `InvalidLicenseException` | 404: the key doesn't exist, or was disabled after a refund or dispute |
-| `ActivationLimitException` | 409: every activation is used; `->license` and `->product` say how many |
-| `NetworkException` | No response: offline, DNS, TLS, timeout (`->status === 0`) |
-| `SendclapException` | Base class; anything else, e.g. 400 bad request, 401 bad API key, 404 not found (`->status`, `getMessage()`) |
+Every exception is a `SendclapException` with `->status`, `->errorCode` (the server's machine-readable code; it is not `->code` because PHP's `Exception` already owns that) and `getMessage()`. The typed ones are chosen by the code:
+
+| Exception | `errorCode` | When |
+|---|---|---|
+| `InvalidLicenseException` | `license_not_found` | 404: the key doesn't exist |
+| `DisabledLicenseException` | `license_disabled` | 403: disabled after a refund or dispute |
+| `InstanceNotFoundException` | `instance_not_found` | 404: `deactivate` for an instance that isn't activated |
+| `ActivationLimitException` | `activation_limit` | 409: every activation is used; `->license` and `->product` say how many |
+| `NetworkException` | `network_error` | No response: offline, DNS, TLS, timeout (`->status === 0`) |
+| `SendclapException` | anything else | e.g. `bad_request`, `invalid_api_key`, `not_found` |
 
 ## Tests
 

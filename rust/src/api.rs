@@ -1,5 +1,6 @@
 use crate::{Http, Result, DEFAULT_BASE_URL, DEFAULT_TIMEOUT};
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::time::Duration;
 
 /// Creator REST API client (Bearer `sc_` key). Server side only: never ship the key in an app.
@@ -37,8 +38,69 @@ pub struct Checkout {
     pub currency: String,
     pub method: String,
     pub email: Option<String>,
-    /// Only returned by `create_checkout`.
-    pub url: Option<String>,
+    /// Where to send the customer to pay.
+    pub url: String,
+}
+
+/// One page of a list, newest first. When `has_more` is true, pass `next` as `after` for the following page.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Page<T> {
+    pub data: Vec<T>,
+    pub has_more: bool,
+    pub next: Option<i64>,
+}
+
+/// The auto-paging iterator returned by `all_*`: yields every item, fetching pages as needed.
+/// It yields one `Err` and then ends if a request fails.
+pub struct Paged<'a, T> {
+    fetch: Box<dyn Fn(Option<i64>) -> Result<Page<T>> + 'a>,
+    buf: VecDeque<T>,
+    /// `Some(cursor)` while another page is left to fetch.
+    cursor: Option<Option<i64>>,
+}
+
+impl<'a, T> Paged<'a, T> {
+    fn new(start: Option<i64>, fetch: impl Fn(Option<i64>) -> Result<Page<T>> + 'a) -> Self {
+        Paged {
+            fetch: Box::new(fetch),
+            buf: VecDeque::new(),
+            cursor: Some(start),
+        }
+    }
+}
+
+impl<T> Iterator for Paged<'_, T> {
+    type Item = Result<T>;
+
+    fn next(&mut self) -> Option<Result<T>> {
+        loop {
+            if let Some(v) = self.buf.pop_front() {
+                return Some(Ok(v));
+            }
+            let after = self.cursor.take()?;
+            match (self.fetch)(after) {
+                Err(e) => return Some(Err(e)),
+                Ok(p) => {
+                    self.buf = p.data.into();
+                    self.cursor = p.next.filter(|_| p.has_more).map(Some);
+                }
+            }
+        }
+    }
+}
+
+/// `limit` is at most 500; `after` is the previous page's `next`.
+#[derive(Debug, Clone, Default)]
+pub struct PageParams {
+    pub limit: Option<u32>,
+    pub after: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct LicenseFilter {
+    pub email: Option<String>,
+    pub limit: Option<u32>,
+    pub after: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -74,6 +136,7 @@ pub struct PaymentFilter {
     pub email: Option<String>,
     /// 1..500, server default 50.
     pub limit: Option<u32>,
+    pub after: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -265,37 +328,85 @@ impl ApiClient {
         self.get("/me", &[])
     }
 
-    pub fn list_payments(&self, filter: &PaymentFilter) -> Result<Vec<Payment>> {
-        let q: Vec<(&str, String)> = [
-            ("status", filter.status.clone()),
-            ("type", filter.type_.clone()),
-            ("email", filter.email.clone()),
-            ("limit", filter.limit.map(|l| l.to_string())),
-        ]
-        .into_iter()
-        .filter_map(|(k, v)| Some((k, v?)))
-        .collect();
-        self.get("/payments", &q)
+    /// Fetches one page; `None` values are left out of the query.
+    fn page<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        extra: &[(&'static str, Option<String>)],
+        p: &PageParams,
+    ) -> Result<Page<T>> {
+        let q: Vec<(&str, String)> = extra
+            .iter()
+            .cloned()
+            .chain([
+                ("limit", p.limit.map(|v| v.to_string())),
+                ("after", p.after.map(|v| v.to_string())),
+            ])
+            .filter_map(|(k, v)| Some((k, v?)))
+            .collect();
+        self.get(path, &q)
+    }
+
+    pub fn list_payments(&self, f: &PaymentFilter) -> Result<Page<Payment>> {
+        let p = PageParams {
+            limit: f.limit,
+            after: f.after,
+        };
+        let extra = [
+            ("status", f.status.clone()),
+            ("type", f.type_.clone()),
+            ("email", f.email.clone()),
+        ];
+        self.page("/payments", &extra, &p)
+    }
+
+    /// Every matching payment across pages, starting from `f.after`.
+    pub fn all_payments(&self, f: &PaymentFilter) -> Paged<'_, Payment> {
+        let f = f.clone();
+        Paged::new(f.after, move |after| {
+            self.list_payments(&PaymentFilter { after, ..f.clone() })
+        })
     }
 
     pub fn get_payment(&self, id: i64) -> Result<PaymentDetail> {
         self.get(&format!("/payments/{id}"), &[])
     }
 
-    pub fn list_members(&self) -> Result<Vec<Member>> {
-        self.get("/members", &[])
+    pub fn list_members(&self, p: &PageParams) -> Result<Page<Member>> {
+        self.page("/members", &[], p)
     }
 
-    pub fn list_licenses(&self, email: Option<&str>) -> Result<Vec<IssuedLicense>> {
-        let q: Vec<(&str, String)> = email
-            .map(|e| ("email", e.to_string()))
-            .into_iter()
-            .collect();
-        self.get("/licenses", &q)
+    pub fn all_members(&self, p: &PageParams) -> Paged<'_, Member> {
+        let p = p.clone();
+        Paged::new(p.after, move |after| {
+            self.list_members(&PageParams { after, ..p.clone() })
+        })
     }
 
-    pub fn list_disputes(&self) -> Result<Vec<Dispute>> {
-        self.get("/disputes", &[])
+    pub fn list_licenses(&self, f: &LicenseFilter) -> Result<Page<IssuedLicense>> {
+        let p = PageParams {
+            limit: f.limit,
+            after: f.after,
+        };
+        self.page("/licenses", &[("email", f.email.clone())], &p)
+    }
+
+    pub fn all_licenses(&self, f: &LicenseFilter) -> Paged<'_, IssuedLicense> {
+        let f = f.clone();
+        Paged::new(f.after, move |after| {
+            self.list_licenses(&LicenseFilter { after, ..f.clone() })
+        })
+    }
+
+    pub fn list_disputes(&self, p: &PageParams) -> Result<Page<Dispute>> {
+        self.page("/disputes", &[], p)
+    }
+
+    pub fn all_disputes(&self, p: &PageParams) -> Paged<'_, Dispute> {
+        let p = p.clone();
+        Paged::new(p.after, move |after| {
+            self.list_disputes(&PageParams { after, ..p.clone() })
+        })
     }
 
     pub fn list_products(&self) -> Result<Vec<Product>> {

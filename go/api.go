@@ -2,6 +2,7 @@ package sendclap
 
 import (
 	"context"
+	"iter"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -33,7 +34,20 @@ type Checkout struct {
 	Currency string  `json:"currency"`
 	Method   string  `json:"method"`
 	Email    string  `json:"email"`
-	URL      string  `json:"url"` // only set by CreateCheckout
+	URL      string  `json:"url"` // where to send the customer to pay
+}
+
+// Page is one page of a list, newest first. When HasMore is true, pass Next as After to get the following page.
+type Page[T any] struct {
+	Data    []T  `json:"data"`
+	HasMore bool `json:"has_more"`
+	Next    *int `json:"next"`
+}
+
+// PageParams pages through a list: Limit is 1..500, After is the previous page's Next.
+type PageParams struct {
+	Limit int
+	After int
 }
 
 type Totals struct {
@@ -62,6 +76,13 @@ type PaymentFilter struct {
 	Type   string
 	Email  string
 	Limit  int // 1..500, server default 50
+	After  int
+}
+
+type LicenseFilter struct {
+	Email string
+	Limit int
+	After int
 }
 
 type Payment struct {
@@ -196,42 +217,85 @@ func (a *APIClient) Me(ctx context.Context) (*Stats, error) {
 	return call[*Stats](ctx, a, http.MethodGet, "/me", nil)
 }
 
-func (a *APIClient) ListPayments(ctx context.Context, f PaymentFilter) ([]Payment, error) {
+// list fetches one page; empty values and zero numbers are left out of the query.
+func list[T any](ctx context.Context, a *APIClient, path string, limit, after int, filters map[string]string) (*Page[T], error) {
 	q := url.Values{}
-	for k, v := range map[string]string{"status": f.Status, "type": f.Type, "email": f.Email} {
+	for k, v := range filters {
 		if v != "" {
 			q.Set(k, v)
 		}
 	}
-	if f.Limit > 0 {
-		q.Set("limit", strconv.Itoa(f.Limit))
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
 	}
-	path := "/payments"
+	if after > 0 {
+		q.Set("after", strconv.Itoa(after))
+	}
 	if len(q) > 0 {
 		path += "?" + q.Encode()
 	}
-	return call[[]Payment](ctx, a, http.MethodGet, path, nil)
+	return call[*Page[T]](ctx, a, http.MethodGet, path, nil)
+}
+
+// all follows Next until the last page. The sequence yields an error once and stops.
+func all[T any](fetch func(after int) (*Page[T], error)) iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		for after := 0; ; {
+			p, err := fetch(after)
+			if err != nil {
+				var zero T
+				yield(zero, err)
+				return
+			}
+			for _, v := range p.Data {
+				if !yield(v, nil) {
+					return
+				}
+			}
+			if !p.HasMore || p.Next == nil {
+				return
+			}
+			after = *p.Next
+		}
+	}
+}
+
+func (a *APIClient) ListPayments(ctx context.Context, f PaymentFilter) (*Page[Payment], error) {
+	return list[Payment](ctx, a, "/payments", f.Limit, f.After, map[string]string{"status": f.Status, "type": f.Type, "email": f.Email})
+}
+
+// AllPayments iterates every matching payment across pages; f.After is ignored.
+func (a *APIClient) AllPayments(ctx context.Context, f PaymentFilter) iter.Seq2[Payment, error] {
+	return all(func(after int) (*Page[Payment], error) { f.After = after; return a.ListPayments(ctx, f) })
 }
 
 func (a *APIClient) GetPayment(ctx context.Context, id int) (*PaymentDetail, error) {
 	return call[*PaymentDetail](ctx, a, http.MethodGet, "/payments/"+strconv.Itoa(id), nil)
 }
 
-func (a *APIClient) ListMembers(ctx context.Context) ([]Member, error) {
-	return call[[]Member](ctx, a, http.MethodGet, "/members", nil)
+func (a *APIClient) ListMembers(ctx context.Context, p PageParams) (*Page[Member], error) {
+	return list[Member](ctx, a, "/members", p.Limit, p.After, nil)
 }
 
-// ListLicenses lists issued keys; a non-empty email filters by customer.
-func (a *APIClient) ListLicenses(ctx context.Context, email string) ([]IssuedLicense, error) {
-	path := "/licenses"
-	if email != "" {
-		path += "?email=" + url.QueryEscape(email)
-	}
-	return call[[]IssuedLicense](ctx, a, http.MethodGet, path, nil)
+func (a *APIClient) AllMembers(ctx context.Context, p PageParams) iter.Seq2[Member, error] {
+	return all(func(after int) (*Page[Member], error) { p.After = after; return a.ListMembers(ctx, p) })
 }
 
-func (a *APIClient) ListDisputes(ctx context.Context) ([]Dispute, error) {
-	return call[[]Dispute](ctx, a, http.MethodGet, "/disputes", nil)
+// ListLicenses lists issued keys; a non-empty Email filters by customer.
+func (a *APIClient) ListLicenses(ctx context.Context, f LicenseFilter) (*Page[IssuedLicense], error) {
+	return list[IssuedLicense](ctx, a, "/licenses", f.Limit, f.After, map[string]string{"email": f.Email})
+}
+
+func (a *APIClient) AllLicenses(ctx context.Context, f LicenseFilter) iter.Seq2[IssuedLicense, error] {
+	return all(func(after int) (*Page[IssuedLicense], error) { f.After = after; return a.ListLicenses(ctx, f) })
+}
+
+func (a *APIClient) ListDisputes(ctx context.Context, p PageParams) (*Page[Dispute], error) {
+	return list[Dispute](ctx, a, "/disputes", p.Limit, p.After, nil)
+}
+
+func (a *APIClient) AllDisputes(ctx context.Context, p PageParams) iter.Seq2[Dispute, error] {
+	return all(func(after int) (*Page[Dispute], error) { p.After = after; return a.ListDisputes(ctx, p) })
 }
 
 func (a *APIClient) ListProducts(ctx context.Context) ([]Product, error) {

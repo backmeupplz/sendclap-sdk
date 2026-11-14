@@ -23,24 +23,28 @@ final class LicenseClient
         return (string) gethostname();
     }
 
+    /** @throws InvalidLicenseException|DisabledLicenseException|ActivationLimitException|NetworkException */
     public function activate(string $licenseKey, string $instanceName): ActivateResult
     {
         $d = $this->post('activate', $licenseKey, $instanceName);
         return new ActivateResult((string) $d['instance_id'], LicenseInfo::from($d), ProductRef::from($d));
     }
 
-    /** Never throws for a bad key (status "invalid"); throws NetworkException when Sendclap can't be reached. */
+    /** Never throws for a bad key (status "invalid" or "disabled"); throws NetworkException when Sendclap can't be reached. */
     public function validate(string $licenseKey, ?string $instanceId = null): ValidateResult
     {
         try {
             $d = $this->post('validate', $licenseKey, $instanceId);
         } catch (InvalidLicenseException) {
             return new ValidateResult(false, 'invalid');
+        } catch (DisabledLicenseException) {
+            return new ValidateResult(false, 'disabled');
         }
         $valid = ($d['valid'] ?? null) === true;
         return new ValidateResult($valid, $valid ? 'active' : 'not_activated', LicenseInfo::from($d), ProductRef::from($d));
     }
 
+    /** @throws InstanceNotFoundException when the instance wasn't activated */
     public function deactivate(string $licenseKey, string $instanceId): DeactivateResult
     {
         $d = $this->post('deactivate', $licenseKey, $instanceId);

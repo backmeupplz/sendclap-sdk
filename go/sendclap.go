@@ -16,24 +16,35 @@ import (
 )
 
 const (
-	Version        = "0.1.0"
+	Version        = "0.2.0"
 	DefaultBaseURL = "https://sendclap.com"
 	DefaultTimeout = 15 * time.Second
 )
 
 var (
-	ErrInvalidLicense  = errors.New("sendclap: invalid license")
-	ErrActivationLimit = errors.New("sendclap: activation limit reached")
-	ErrNetwork         = errors.New("sendclap: network error")
+	ErrInvalidLicense   = errors.New("sendclap: invalid license")          // license_not_found
+	ErrLicenseDisabled  = errors.New("sendclap: license disabled")         // license_disabled: refunded or disputed
+	ErrInstanceNotFound = errors.New("sendclap: instance not activated")   // instance_not_found
+	ErrActivationLimit  = errors.New("sendclap: activation limit reached") // activation_limit
+	ErrNetwork          = errors.New("sendclap: network error")            // network_error
 )
 
-// Error is returned for every failed call. Status is the HTTP status, 0 when no response arrived.
-// Use errors.Is(err, ErrInvalidLicense / ErrActivationLimit / ErrNetwork) to tell the cases apart.
+// Error is returned for every failed call. Status is the HTTP status (0 when no response arrived) and Code the
+// server's machine-readable code such as "invalid_api_key" or "not_found" ("" when the reply wasn't a Sendclap
+// error, "network_error" with no reply). Use errors.Is with the Err* values to tell the license cases apart.
 type Error struct {
 	Status  int
+	Code    string
 	Message string
 	kind    error
 	cause   error
+}
+
+var kinds = map[string]error{
+	"license_not_found":  ErrInvalidLicense,
+	"license_disabled":   ErrLicenseDisabled,
+	"instance_not_found": ErrInstanceNotFound,
+	"activation_limit":   ErrActivationLimit,
 }
 
 func (e *Error) Error() string {
@@ -100,12 +111,12 @@ func (c *client) do(ctx context.Context, method, path string, body, out any) err
 	}
 	res, err := c.http.Do(req)
 	if err != nil {
-		return &Error{Message: err.Error(), kind: ErrNetwork, cause: err}
+		return &Error{Code: "network_error", Message: err.Error(), kind: ErrNetwork, cause: err}
 	}
 	defer res.Body.Close()
 	data, err := io.ReadAll(res.Body)
 	if err != nil {
-		return &Error{Message: err.Error(), kind: ErrNetwork, cause: err}
+		return &Error{Code: "network_error", Message: err.Error(), kind: ErrNetwork, cause: err}
 	}
 	if res.StatusCode/100 == 2 {
 		if err := json.Unmarshal(data, out); err != nil {
@@ -114,22 +125,17 @@ func (c *client) do(ctx context.Context, method, path string, body, out any) err
 		return nil
 	}
 	var e struct {
-		Error     string      `json:"error"`
-		Valid     *bool       `json:"valid"`
-		Activated *bool       `json:"activated"`
-		License   LicenseInfo `json:"license"`
-		Product   ProductRef  `json:"product"`
+		Error   string      `json:"error"`
+		Code    string      `json:"code"`
+		License LicenseInfo `json:"license"`
+		Product ProductRef  `json:"product"`
 	}
-	parsed := json.Unmarshal(data, &e) == nil // HTML error pages (wrong base URL, crashes) stay plain errors
-	base := Error{Status: res.StatusCode, Message: e.Error}
+	json.Unmarshal(data, &e) // HTML error pages (wrong base URL, crashes) leave Code empty and stay plain errors
+	base := Error{Status: res.StatusCode, Code: e.Code, Message: e.Error, kind: kinds[e.Code]}
 	if base.Message == "" {
 		base.Message = fmt.Sprintf("HTTP %d", res.StatusCode)
 	}
-	switch {
-	case parsed && res.StatusCode == 404 && e.Valid != nil && !*e.Valid:
-		base.kind = ErrInvalidLicense
-	case parsed && res.StatusCode == 409 && e.Activated != nil && !*e.Activated:
-		base.kind = ErrActivationLimit
+	if base.kind == ErrActivationLimit {
 		return &ActivationLimitError{Err: &base, License: e.License, Product: e.Product}
 	}
 	return &base
@@ -167,13 +173,14 @@ type DeactivateResult struct {
 const (
 	StatusActive       = "active"        // valid
 	StatusNotActivated = "not_activated" // key exists, this instance is not activated
-	StatusInvalid      = "invalid"       // key unknown, or disabled after a refund or dispute
+	StatusInvalid      = "invalid"       // key unknown
+	StatusDisabled     = "disabled"      // key disabled after a refund or dispute
 )
 
 type ValidateResult struct {
 	Valid   bool         `json:"valid"`
 	Status  string       `json:"status"`
-	License *LicenseInfo `json:"license,omitempty"` // nil when Status is StatusInvalid
+	License *LicenseInfo `json:"license,omitempty"` // nil when Status is StatusInvalid or StatusDisabled
 	Product *ProductRef  `json:"product,omitempty"`
 }
 
@@ -200,7 +207,7 @@ func (l *LicenseClient) Activate(ctx context.Context, licenseKey, instanceName s
 }
 
 // Validate checks a key, and with a non-empty instanceID that the instance is activated.
-// An unknown or disabled key is a result (StatusInvalid), not an error; errors mean the answer is unknown (e.g. offline).
+// An unknown or disabled key is a result (StatusInvalid, StatusDisabled), not an error; errors mean the answer is unknown (e.g. offline).
 func (l *LicenseClient) Validate(ctx context.Context, licenseKey, instanceID string) (*ValidateResult, error) {
 	var r struct {
 		Valid   bool        `json:"valid"`
@@ -211,6 +218,9 @@ func (l *LicenseClient) Validate(ctx context.Context, licenseKey, instanceID str
 		if errors.Is(err, ErrInvalidLicense) {
 			return &ValidateResult{Status: StatusInvalid}, nil
 		}
+		if errors.Is(err, ErrLicenseDisabled) {
+			return &ValidateResult{Status: StatusDisabled}, nil
+		}
 		return nil, err
 	}
 	status := StatusActive
@@ -220,7 +230,7 @@ func (l *LicenseClient) Validate(ctx context.Context, licenseKey, instanceID str
 	return &ValidateResult{Valid: r.Valid, Status: status, License: &r.License, Product: &r.Product}, nil
 }
 
-// Deactivate releases an instance, freeing one activation.
+// Deactivate releases an instance, freeing one activation. ErrInstanceNotFound means it wasn't activated.
 func (l *LicenseClient) Deactivate(ctx context.Context, licenseKey, instanceID string) (*DeactivateResult, error) {
 	var r DeactivateResult
 	if err := l.c.do(ctx, http.MethodPost, "/licenses/deactivate", licenseBody(licenseKey, instanceID), &r); err != nil {

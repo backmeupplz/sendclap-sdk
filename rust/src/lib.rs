@@ -9,22 +9,32 @@ use std::time::Duration;
 mod api;
 pub use api::*;
 
-pub const VERSION: &str = "0.1.0";
+pub const VERSION: &str = "0.2.0";
 pub const DEFAULT_BASE_URL: &str = "https://sendclap.com";
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone)]
 pub enum Error {
-    /// 404 from a license endpoint: the key is unknown, or disabled after a refund or dispute.
+    /// `license_not_found` (404): the key is unknown.
     InvalidLicense { message: String },
-    /// 409 from activate: every activation of the key is in use.
+    /// `license_disabled` (403): the key was disabled after a refund or dispute.
+    LicenseDisabled { message: String },
+    /// `instance_not_found` (404): deactivate for an instance that isn't activated.
+    InstanceNotFound { message: String },
+    /// `activation_limit` (409): every activation of the key is in use.
     ActivationLimit {
         message: String,
         license: LicenseInfo,
         product: ProductRef,
     },
     /// Any other non-2xx answer (400, 401, 404, 5xx, HTML error pages) or an unparsable body.
-    Api { status: u16, message: String },
+    /// `code` is the server's code such as `invalid_api_key` or `not_found`, empty when the
+    /// reply wasn't a Sendclap error.
+    Api {
+        status: u16,
+        code: String,
+        message: String,
+    },
     /// No HTTP response: DNS, connection refused, TLS, timeout.
     Network(String),
 }
@@ -33,10 +43,23 @@ impl Error {
     /// HTTP status, 0 for network errors.
     pub fn status(&self) -> u16 {
         match self {
-            Error::InvalidLicense { .. } => 404,
+            Error::InvalidLicense { .. } | Error::InstanceNotFound { .. } => 404,
+            Error::LicenseDisabled { .. } => 403,
             Error::ActivationLimit { .. } => 409,
             Error::Api { status, .. } => *status,
             Error::Network(_) => 0,
+        }
+    }
+
+    /// The server's machine-readable code; `"network_error"` with no reply, empty for non-Sendclap replies.
+    pub fn code(&self) -> &str {
+        match self {
+            Error::InvalidLicense { .. } => "license_not_found",
+            Error::LicenseDisabled { .. } => "license_disabled",
+            Error::InstanceNotFound { .. } => "instance_not_found",
+            Error::ActivationLimit { .. } => "activation_limit",
+            Error::Api { code, .. } => code,
+            Error::Network(_) => "network_error",
         }
     }
 }
@@ -46,6 +69,8 @@ impl std::fmt::Display for Error {
         match self {
             Error::Network(m) => write!(f, "sendclap: network error: {m}"),
             Error::InvalidLicense { message }
+            | Error::LicenseDisabled { message }
+            | Error::InstanceNotFound { message }
             | Error::ActivationLimit { message, .. }
             | Error::Api { message, .. } => {
                 write!(f, "sendclap: {message} (HTTP {})", self.status())
@@ -120,6 +145,7 @@ impl Http {
         if (200..300).contains(&status) {
             return serde_json::from_str(&text).map_err(|_| Error::Api {
                 status,
+                code: String::new(),
                 message: "invalid JSON response".into(),
             });
         }
@@ -129,14 +155,21 @@ impl Http {
             .as_str()
             .map(String::from)
             .unwrap_or_else(|| format!("HTTP {status}"));
-        Err(match status {
-            404 if v["valid"] == Value::Bool(false) => Error::InvalidLicense { message },
-            409 if v["activated"] == Value::Bool(false) => Error::ActivationLimit {
+        let code = v["code"].as_str().unwrap_or_default().to_string();
+        Err(match code.as_str() {
+            "license_not_found" => Error::InvalidLicense { message },
+            "license_disabled" => Error::LicenseDisabled { message },
+            "instance_not_found" => Error::InstanceNotFound { message },
+            "activation_limit" => Error::ActivationLimit {
                 message,
                 license: serde_json::from_value(v["license"].clone()).unwrap_or_default(),
                 product: serde_json::from_value(v["product"].clone()).unwrap_or_default(),
             },
-            _ => Error::Api { status, message },
+            _ => Error::Api {
+                status,
+                code,
+                message,
+            },
         })
     }
 }
@@ -177,15 +210,17 @@ pub enum ValidationStatus {
     Active,
     /// The key exists but this instance is not activated.
     NotActivated,
-    /// The key is unknown, or disabled after a refund or dispute.
+    /// The key is unknown.
     Invalid,
+    /// The key was disabled after a refund or dispute.
+    Disabled,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ValidateResult {
     pub valid: bool,
     pub status: ValidationStatus,
-    /// `None` when status is `Invalid`.
+    /// `None` when status is `Invalid` or `Disabled`.
     pub license: Option<LicenseInfo>,
     pub product: Option<ProductRef>,
 }
@@ -232,7 +267,7 @@ impl LicenseClient {
     }
 
     /// Checks a key, and with an instance id that the instance is activated. An unknown or disabled
-    /// key is `Ok` with status `Invalid`; `Err` means the answer is unknown (e.g. offline).
+    /// key is `Ok` with status `Invalid` or `Disabled`; `Err` means the answer is unknown (e.g. offline).
     pub fn validate(&self, license_key: &str, instance_id: Option<&str>) -> Result<ValidateResult> {
         #[derive(Deserialize)]
         struct Raw {
@@ -251,17 +286,23 @@ impl LicenseClient {
                 license: Some(r.license),
                 product: Some(r.product),
             }),
-            Err(Error::InvalidLicense { .. }) => Ok(ValidateResult {
-                valid: false,
-                status: ValidationStatus::Invalid,
-                license: None,
-                product: None,
-            }),
+            Err(e @ (Error::InvalidLicense { .. } | Error::LicenseDisabled { .. })) => {
+                Ok(ValidateResult {
+                    valid: false,
+                    status: if matches!(e, Error::InvalidLicense { .. }) {
+                        ValidationStatus::Invalid
+                    } else {
+                        ValidationStatus::Disabled
+                    },
+                    license: None,
+                    product: None,
+                })
+            }
             Err(e) => Err(e),
         }
     }
 
-    /// Releases an instance, freeing one activation.
+    /// Releases an instance, freeing one activation. `Error::InstanceNotFound` if it wasn't activated.
     pub fn deactivate(&self, license_key: &str, instance_id: &str) -> Result<DeactivateResult> {
         self.call("deactivate", license_key, Some(instance_id))
     }

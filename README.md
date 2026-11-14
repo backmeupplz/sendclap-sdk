@@ -14,10 +14,10 @@ The full API reference is at **https://sendclap.com/docs**.
 | Go | [`go/`](go) | `go get github.com/backmeupplz/sendclap-sdk/go` |
 | Rust | [`rust/`](rust) | `cargo add sendclap` |
 | C# (.NET 8+, .NET Standard 2.0 for Unity and older apps) | [`dotnet/`](dotnet) | `dotnet add package Sendclap` |
-| Swift (macOS 12+, iOS 15+) | [`swift/`](swift) | `.package(url: "https://github.com/backmeupplz/sendclap-sdk", from: "0.1.0")` |
+| Swift (macOS 12+, iOS 15+) | [`swift/`](swift) | `.package(url: "https://github.com/backmeupplz/sendclap-sdk", from: "0.2.0")` |
 | PHP 8.1+ | [`php/`](php) | `composer require sendclap/sendclap` |
 
-Every SDK is small and has no dependencies beyond the language's standard library, except Rust (`ureq` and `serde`) and .NET Standard 2.0 (`System.Text.Json`).
+Every SDK is small and has no dependencies beyond the language's standard library, except Rust (`ureq` and `serde`) and .NET Standard 2.0 (`System.Text.Json` and `Microsoft.Bcl.AsyncInterfaces`). Go needs 1.23 for the `iter` package.
 
 ## The same API in every language
 
@@ -26,26 +26,40 @@ The method names below use JavaScript casing. Each SDK follows its own language'
 **`LicenseClient`** needs no key and is safe to ship.
 
 - `activate(licenseKey, instanceName)` returns the instance id (which is the name you passed), the license counts and the product.
-- `validate(licenseKey, instanceId?)` returns `valid` and a `status` of `active`, `not_activated` or `invalid`. It throws only when no definite answer arrived.
-- `deactivate(licenseKey, instanceId)` frees one activation.
+- `validate(licenseKey, instanceId?)` returns `valid` and a `status` of `active`, `not_activated`, `invalid` (unknown key) or `disabled` (refunded or disputed). It throws only when no definite answer arrived, so "this license was refunded" and "invalid key" are different outcomes you can show.
+- `deactivate(licenseKey, instanceId)` frees one activation, and fails with `InstanceNotFoundError` if that instance wasn't activated.
 - `instanceName()` returns this machine's hostname, which you can use as the instance name.
 
 **`ApiClient`** takes your `sc_` key and is for server-side use only. **Never ship the key in an app or a web page.**
 
-- `createCheckout`, `getCheckout`
-- `me`, `listPayments`, `getPayment`, `listMembers`, `listLicenses`, `listDisputes`, `listProducts`, `listMemberships`
+- `createCheckout`, `getCheckout` (both return the checkout's `url`)
+- `me`, `getPayment`, `listProducts`, `listMemberships`
+- `listPayments`, `listMembers`, `listLicenses`, `listDisputes`, which return a page: `{ data, has_more, next }`
+- `allPayments`, `allMembers`, `allLicenses`, `allDisputes`, which auto-page through every item
 - `getCreator(handle)`, which is public and needs no key
 
-Both clients accept a base URL (default `https://sendclap.com`) and a timeout (default 15 s). They send `User-Agent: sendclap-<lang>/0.1.0`.
+Both clients accept a base URL (default `https://sendclap.com`) and a timeout (default 15 s). They send `User-Agent: sendclap-<lang>/0.2.0`. In a browser the JavaScript SDK sends `x-sendclap-client: sendclap-js/0.2.0` instead, because browsers forbid setting `User-Agent`.
 
-**Errors** work the same way everywhere. `SendclapError` carries the HTTP `status` and the server's message. Three special cases extend it: `InvalidLicenseError` (404, the key is unknown or was disabled after a refund or a dispute), `ActivationLimitError` (409, with the license counts) and `NetworkError` (no response, `status` 0).
+**Pages.** The four list endpoints return newest first and take `limit` (at most 500) and `after`. A page has `data`, `has_more` and `next`, and when `has_more` is true you pass `next` as `after` to get the following page. The `all…` helpers do that for you with each language's idiom: an async iterator in JavaScript, a generator in Python and PHP, an `iter.Seq2` in Go, an `Iterator` in Rust, `IAsyncEnumerable` in C# and `AsyncThrowingStream` in Swift.
+
+**Errors** work the same way everywhere. Every failed call raises a `SendclapError` with the HTTP `status`, the server's `code` (for example `invalid_api_key`, `not_found`, `bad_request`, `rate_limited`, `internal_error`) and its message. The SDK maps typed errors from the `code`:
+
+| Error | `code` | Status |
+| --- | --- | --- |
+| `InvalidLicenseError` | `license_not_found` | 404 |
+| `DisabledLicenseError` | `license_disabled` | 403 |
+| `InstanceNotFoundError` | `instance_not_found` | 404 |
+| `ActivationLimitError` (with the license counts) | `activation_limit` | 409 |
+| `NetworkError` | `network_error` | 0 (no response) |
+
+The names follow each language's convention (`ErrLicenseDisabled` in Go, `DisabledLicenseException` in C# and PHP, `.licenseDisabled` in Swift, `Error::LicenseDisabled` in Rust). In PHP the property is `errorCode`, because `Exception::$code` is already taken. A reply that isn't a Sendclap error (such as an HTML page from a proxy) has an empty `code`.
 
 ## Working offline
 
 Validate at startup or once a day, and store the time of the last successful validation. The SDK's errors let your app tell three situations apart:
 
 - If `validate` returns `valid`, update the stored time and carry on.
-- If it returns `invalid` or `not_activated`, the answer is definite, so lock the app or ask for a key.
+- If it returns `invalid`, `disabled` or `not_activated`, the answer is definite, so lock the app or ask for a key (and say that the license was refunded when it is `disabled`).
 - If it throws `NetworkError`, the customer is probably offline. Keep working while the last success is within your grace period (for example 7 days), and lock after that.
 
 Each package README shows this pattern in about ten lines.
@@ -68,15 +82,15 @@ Swift's `Package.swift` and PHP's `composer.json` live at the repo root because 
 
 ## Publishing (not set up yet)
 
-Every package is at version 0.1.0. Nothing has been published.
+Every package is at version 0.2.0. Nothing has been published.
 
 - **npm (`sendclap`)**: trusted publishing from a GitHub Actions workflow on the mirror, the same way plain is published, or an npm token as a Forgejo secret. Run `npm publish --provenance` in `js/`.
 - **PyPI (`sendclap`)**: PyPI trusted publishing (GitHub Actions on the mirror), then `python -m build` and `pypa/gh-action-pypi-publish` in `python/`.
 - **crates.io (`sendclap`)**: crates.io trusted publishing (GitHub Actions on the mirror), then `cargo publish` in `rust/`.
 - **NuGet (`Sendclap`)**: a nuget.org API key as a Forgejo secret, then `dotnet pack -c Release` and `dotnet nuget push`.
-- **Packagist (`sendclap/sendclap`)**: submit the repo URL on packagist.org once and add the Packagist webhook (or GitHub integration) so that tags show up. Packagist takes the version from git tags such as `v0.1.0`. Composer installs fetch the whole repo, which is small.
-- **Swift**: no registry. SwiftPM resolves git tags on the repo, so tag `v0.1.0` (or `0.1.0`).
-- **Go**: no registry. Because the module lives in `go/`, its tags need the prefix `go/v0.1.0`. pkg.go.dev picks them up from the proxy.
+- **Packagist (`sendclap/sendclap`)**: submit the repo URL on packagist.org once and add the Packagist webhook (or GitHub integration) so that tags show up. Packagist takes the version from git tags such as `v0.2.0`. Composer installs fetch the whole repo, which is small.
+- **Swift**: no registry. SwiftPM resolves git tags on the repo, so tag `v0.2.0` (or `0.2.0`).
+- **Go**: no registry. Because the module lives in `go/`, its tags need the prefix `go/v0.2.0`. pkg.go.dev picks them up from the proxy.
 - The repo has to exist publicly as `github.com/backmeupplz/sendclap-sdk` (the Forgejo mirror) before Swift, Go and Packagist can resolve it.
 
 MIT licensed. See [LICENSE](LICENSE).

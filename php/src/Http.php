@@ -7,7 +7,7 @@ namespace Sendclap;
 /** @internal Shared transport for LicenseClient and ApiClient. */
 final class Http
 {
-    public const VERSION = '0.1.0';
+    public const VERSION = '0.2.0';
     public const DEFAULT_BASE_URL = 'https://sendclap.com';
 
     private string $base;
@@ -62,12 +62,13 @@ final class Http
         }
         $d = is_array($data) ? $data : [];
         $message = isset($d['error']) && is_string($d['error']) ? $d['error'] : "HTTP $status";
-        if ($status === 404 && ($d['valid'] ?? null) === false) {
-            throw new InvalidLicenseException($status, $message);
-        }
-        if ($status === 409 && ($d['activated'] ?? null) === false) {
-            throw new ActivationLimitException($status, $message, LicenseInfo::from($d), ProductRef::from($d));
-        }
-        throw new SendclapException($status, $message);
+        $code = isset($d['code']) && is_string($d['code']) ? $d['code'] : '';
+        throw match ($code) {
+            'license_not_found' => new InvalidLicenseException($status, $message),
+            'license_disabled' => new DisabledLicenseException($status, $message),
+            'instance_not_found' => new InstanceNotFoundException($status, $message),
+            'activation_limit' => new ActivationLimitException($status, $message, LicenseInfo::from($d), ProductRef::from($d)),
+            default => new SendclapException($status, $message, $code),
+        };
     }
 }

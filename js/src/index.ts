@@ -1,7 +1,7 @@
 // Sendclap client for JavaScript and TypeScript: license checks for the apps you ship, and the creator REST API for your server.
 // Zero dependencies; uses the global fetch (Node 18+, Bun, Deno, browsers, Electron).
 
-export const VERSION = '0.1.0'
+export const VERSION = '0.2.0'
 const DEFAULT_BASE_URL = 'https://sendclap.com'
 const DEFAULT_TIMEOUT_MS = 15_000
 
@@ -14,31 +14,48 @@ export interface ClientOptions {
 
 // ---------- errors ----------
 
-/** Any failed request. `status` is the HTTP status, or 0 when no response arrived. */
+/**
+ * Any failed request. `status` is the HTTP status (0 when no response arrived) and `code` the server's machine-readable
+ * code, such as `invalid_api_key` or `not_found` ('' when the reply wasn't a Sendclap error, 'network_error' with no reply).
+ */
 export class SendclapError extends Error {
-  constructor(message: string, readonly status: number, readonly body?: unknown) {
+  constructor(message: string, readonly status: number, readonly code: string, readonly body?: unknown) {
     super(message)
     this.name = 'SendclapError'
   }
 }
-/** The license key doesn't exist, or it was disabled after a refund or a dispute (the server doesn't say which). */
+/** The license key doesn't exist (`license_not_found`). */
 export class InvalidLicenseError extends SendclapError {
   constructor(message: string, body?: unknown) {
-    super(message, 404, body)
+    super(message, 404, 'license_not_found', body)
     this.name = 'InvalidLicenseError'
   }
 }
-/** Every activation of the key is in use; deactivate another instance first. */
+/** The key exists but was disabled after a refund or a dispute (`license_disabled`). */
+export class DisabledLicenseError extends SendclapError {
+  constructor(message: string, body?: unknown) {
+    super(message, 403, 'license_disabled', body)
+    this.name = 'DisabledLicenseError'
+  }
+}
+/** Every activation of the key is in use; deactivate another instance first (`activation_limit`). */
 export class ActivationLimitError extends SendclapError {
   constructor(message: string, readonly license: LicenseInfo, readonly product: ProductRef, body?: unknown) {
-    super(message, 409, body)
+    super(message, 409, 'activation_limit', body)
     this.name = 'ActivationLimitError'
+  }
+}
+/** Deactivate was called for an instance that isn't activated (`instance_not_found`). */
+export class InstanceNotFoundError extends SendclapError {
+  constructor(message: string, body?: unknown) {
+    super(message, 404, 'instance_not_found', body)
+    this.name = 'InstanceNotFoundError'
   }
 }
 /** No response: offline, DNS, TLS or timeout. Fall back to your cached validation. */
 export class NetworkError extends SendclapError {
   constructor(message: string, readonly cause?: unknown) {
-    super(message, 0)
+    super(message, 0, 'network_error')
     this.name = 'NetworkError'
   }
 }
@@ -51,8 +68,8 @@ export interface ActivateResult { instance_id: string; license: LicenseInfo; pro
 export interface DeactivateResult { license: LicenseInfo; product: ProductRef }
 export interface ValidateResult {
   valid: boolean
-  /** `active`: valid. `not_activated`: the key exists but this instance isn't activated. `invalid`: unknown or disabled key. */
-  status: 'active' | 'not_activated' | 'invalid'
+  /** `active`: valid. `not_activated`: the key exists but this instance isn't activated. `invalid`: unknown key. `disabled`: refunded or disputed. */
+  status: 'active' | 'not_activated' | 'invalid' | 'disabled'
   license?: LicenseInfo
   product?: ProductRef
 }
@@ -78,8 +95,8 @@ export interface Checkout {
   currency: string
   method: string
   email: string | null
-  /** Only returned by createCheckout. */
-  url?: string
+  /** Where to send the customer to pay. */
+  url: string
 }
 export interface Totals { payments: number; gross: number; fees: number; net: number }
 export interface Stats {
@@ -88,7 +105,11 @@ export interface Stats {
   members: { active: number; monthly_recurring: number }
   open_disputes: number
 }
-export interface PaymentFilter { status?: string; type?: string; email?: string; limit?: number }
+/** `limit` is at most 500; `after` is the previous page's `next`. */
+export interface PageParams { limit?: number; after?: number }
+export interface PaymentFilter extends PageParams { status?: string; type?: string; email?: string }
+export interface LicenseFilter extends PageParams { email?: string }
+export interface Page<T> { data: T[]; has_more: boolean; next: number | null }
 export interface Payment {
   id: number; type: string; method: string; status: string; amount: number; fee: number; currency: string
   email: string | null; message: string | null; reference: string | null; test: boolean; created_at: string
@@ -134,8 +155,9 @@ async function request<T>(o: ClientOptions, method: 'GET' | 'POST', path: string
   const url = new URL(`${(o.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '')}/api/v1${path}`)
   for (const [k, v] of Object.entries(init.query ?? {})) if (v !== undefined && v !== '') url.searchParams.set(k, String(v))
   const headers: Record<string, string> = { accept: 'application/json' }
-  // in a web page a custom User-Agent would need a CORS preflight the server doesn't allow, so only send it elsewhere
+  // browsers forbid setting User-Agent, so a web page identifies itself with x-sendclap-client instead
   if (typeof (globalThis as any).document === 'undefined') headers['user-agent'] = `sendclap-js/${VERSION}`
+  else headers['x-sendclap-client'] = `sendclap-js/${VERSION}`
   if (init.body) headers['content-type'] = 'application/json'
   if (init.apiKey) headers.authorization = `Bearer ${init.apiKey}`
   let res: Response, text: string
@@ -152,9 +174,12 @@ async function request<T>(o: ClientOptions, method: 'GET' | 'POST', path: string
     return data as T
   }
   const message = typeof data?.error === 'string' ? data.error : `HTTP ${res.status}`
-  if (res.status === 404 && data?.valid === false) throw new InvalidLicenseError(message, data)
-  if (res.status === 409 && data?.activated === false) throw new ActivationLimitError(message, data.license, data.product, data)
-  throw new SendclapError(message, res.status, data ?? text)
+  const code = typeof data?.code === 'string' ? data.code : ''
+  if (code === 'license_not_found') throw new InvalidLicenseError(message, data)
+  if (code === 'license_disabled') throw new DisabledLicenseError(message, data)
+  if (code === 'instance_not_found') throw new InstanceNotFoundError(message, data)
+  if (code === 'activation_limit') throw new ActivationLimitError(message, data.license, data.product, data)
+  throw new SendclapError(message, res.status, code, data ?? text)
 }
 
 // ---------- clients ----------
@@ -167,7 +192,7 @@ export class LicenseClient {
     return request<T>(this.options, 'POST', `/licenses/${action}`, { body: { license_key: licenseKey, ...(instanceId ? { instance_id: instanceId } : {}) } })
   }
 
-  /** Registers this device against the key. Activating the same instance twice counts once. The returned instance_id is the name you passed. */
+  /** Registers this device against the key. Throws InvalidLicenseError, DisabledLicenseError or ActivationLimitError. Activating the same instance twice counts once. The returned instance_id is the name you passed. */
   async activate(licenseKey: string, instanceName: string): Promise<ActivateResult> {
     const { instance_id, license, product } = await this.call<ActivateResult>('activate', licenseKey, instanceName)
     return { instance_id, license, product }
@@ -180,14 +205,24 @@ export class LicenseClient {
       return { valid, status: valid ? 'active' : 'not_activated', license, product }
     } catch (e) {
       if (e instanceof InvalidLicenseError) return { valid: false, status: 'invalid' }
+      if (e instanceof DisabledLicenseError) return { valid: false, status: 'disabled' }
       throw e
     }
   }
 
-  /** Releases a device, freeing one activation. */
+  /** Releases a device, freeing one activation. Throws InstanceNotFoundError if it wasn't activated. */
   async deactivate(licenseKey: string, instanceId: string): Promise<DeactivateResult> {
     const { license, product } = await this.call<DeactivateResult>('deactivate', licenseKey, instanceId)
     return { license, product }
+  }
+}
+
+async function* paginate<T>(fetchPage: (after?: number) => Promise<Page<T>>): AsyncGenerator<T> {
+  let page = await fetchPage()
+  for (;;) {
+    yield* page.data
+    if (!page.has_more || page.next === null) return
+    page = await fetchPage(page.next)
   }
 }
 
@@ -205,11 +240,16 @@ export class ApiClient {
   }
   getCheckout(id: string) { return this.get<Checkout>(`/checkouts/${encodeURIComponent(id)}`) }
   me() { return this.get<Stats>('/me') }
-  listPayments(filter: PaymentFilter = {}) { return this.get<Payment[]>('/payments', { ...filter }) }
+  listPayments(filter: PaymentFilter = {}) { return this.get<Page<Payment>>('/payments', { ...filter }) }
   getPayment(id: number) { return this.get<PaymentDetail>(`/payments/${encodeURIComponent(id)}`) }
-  listMembers() { return this.get<Member[]>('/members') }
-  listLicenses(email?: string) { return this.get<IssuedLicense[]>('/licenses', { email }) }
-  listDisputes() { return this.get<Dispute[]>('/disputes') }
+  listMembers(page: PageParams = {}) { return this.get<Page<Member>>('/members', { ...page }) }
+  listLicenses(filter: LicenseFilter = {}) { return this.get<Page<IssuedLicense>>('/licenses', { ...filter }) }
+  listDisputes(page: PageParams = {}) { return this.get<Page<Dispute>>('/disputes', { ...page }) }
+  /** The auto-paging versions: `for await (const p of api.allPayments({ status: 'paid' }))` follows `next` until the end. */
+  allPayments(filter: PaymentFilter = {}) { return paginate(after => this.listPayments({ ...filter, after })) }
+  allMembers(page: PageParams = {}) { return paginate(after => this.listMembers({ ...page, after })) }
+  allLicenses(filter: LicenseFilter = {}) { return paginate(after => this.listLicenses({ ...filter, after })) }
+  allDisputes(page: PageParams = {}) { return paginate(after => this.listDisputes({ ...page, after })) }
   listProducts() { return this.get<Product[]>('/products') }
   listMemberships() { return this.get<Membership[]>('/memberships') }
   /** Public: works without an API key. */

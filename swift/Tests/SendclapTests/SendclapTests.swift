@@ -44,7 +44,10 @@ final class MockServer: URLProtocol {
     }
 
     static let meta = #""license":{"key":"GOOD","activations":1,"max_activations":3},"product":{"id":1,"name":"Pro"}"#
-    static let checkout = #"{"id":"0xabc","status":"pending","type":"product","amount":29,"currency":"usd","method":"card","email":"b@example.com""#
+    static let checkout = #"{"id":"0xabc","status":"pending","type":"product","amount":29,"currency":"usd","method":"card","email":"b@example.com","url":"https://sendclap.com/checkout/0xabc""#
+    static func payment(_ id: Int, _ reference: String) -> String {
+        "{\"id\":\(id),\"type\":\"product\",\"method\":\"card\",\"status\":\"paid\",\"amount\":29,\"fee\":0.29,\"currency\":\"usd\",\"email\":null,\"message\":null,\"reference\":\"\(reference)\",\"test\":false,\"created_at\":\"2026-11-13T18:04:11.000Z\"}"
+    }
     static let html = "<!doctype html><h1>Not found</h1>"
 
     static func route(_ req: URLRequest, _ body: Data?) -> (Int, String) {
@@ -52,11 +55,15 @@ final class MockServer: URLProtocol {
         if path.hasPrefix("/api/v1/licenses/") {
             let b = (try? JSONSerialization.jsonObject(with: body ?? Data())) as? [String: String] ?? [:]
             let key = b["license_key"], instance = b["instance_id"], action = url.lastPathComponent
-            if key != "GOOD" && key != "FULL" { return (404, #"{"valid":false,"error":"license key not found"}"#) }
+            if key == "REFUNDED" { return (403, #"{"valid":false,"error":"this license key is disabled","code":"license_disabled"}"#) }
+            if key != "GOOD" && key != "FULL" { return (404, #"{"valid":false,"error":"license key not found","code":"license_not_found"}"#) }
             if action == "validate" { return (200, "{\"valid\":\(instance == nil || instance == "dev-1"),\(meta)}") }
-            guard let instance = instance else { return (400, #"{"error":"instance_id is required"}"#) }
+            guard let instance = instance else { return (400, #"{"error":"instance_id is required","code":"bad_request"}"#) }
+            if action == "deactivate" && instance != "dev-1" {
+                return (404, "{\"deactivated\":false,\"error\":\"that instance is not activated\",\"code\":\"instance_not_found\",\(meta)}")
+            }
             if action == "activate" && key == "FULL" {
-                return (409, #"{"activated":false,"error":"activation limit reached","license":{"key":"FULL","activations":3,"max_activations":3},"product":{"id":1,"name":"Pro"}}"#)
+                return (409, #"{"activated":false,"error":"activation limit reached","code":"activation_limit","license":{"key":"FULL","activations":3,"max_activations":3},"product":{"id":1,"name":"Pro"}}"#)
             }
             if action == "activate" { return (200, "{\"activated\":true,\"instance_id\":\"\(instance)\",\(meta)}") }
             return (200, "{\"deactivated\":true,\(meta.replacingOccurrences(of: "\"activations\":1", with: "\"activations\":0"))}")
@@ -65,20 +72,23 @@ final class MockServer: URLProtocol {
             return (200, #"{"handle":"demo","name":"Ada Builds","bio":"","url":"https://sendclap.com/demo","avatar":null,"links":[{"label":"GitHub","url":"https://github.com/ada"}],"payment_methods":{"card":true,"crypto":false,"x402":false},"tip":{"suggested":5,"currency":"usd","page":"https://sendclap.com/demo","x402":null},"memberships":[{"id":1,"name":"Supporter","description":"","price":5,"currency":"usd","interval":"month","x402":null}],"products":[]}"#)
         }
         if !path.hasPrefix("/api/v1/") { return (404, html) }
-        if req.value(forHTTPHeaderField: "Authorization") != "Bearer sc_test" { return (401, #"{"error":"invalid API key"}"#) }
+        if req.value(forHTTPHeaderField: "Authorization") != "Bearer sc_test" { return (401, #"{"error":"invalid API key","code":"invalid_api_key"}"#) }
         switch (req.httpMethod ?? "GET", path) {
-        case ("POST", "/api/v1/checkouts"): return (201, checkout + #","url":"https://sendclap.com/checkout/0xabc"}"#)
+        case ("POST", "/api/v1/checkouts"): return (201, checkout + "}")
         case ("GET", "/api/v1/checkouts/0xabc"): return (200, checkout + "}")
         case ("GET", "/api/v1/me"):
             return (200, #"{"handle":"demo","name":"Ada","url":"u","currency":"usd","last_30_days":{"payments":2,"gross":58,"fees":0.58,"net":57.42},"all_time":{"payments":3,"gross":87,"fees":0.87,"net":86.13},"members":{"active":1,"monthly_recurring":5},"open_disputes":0}"#)
         case ("GET", "/api/v1/payments"):
-            return (200, "[{\"id\":42,\"type\":\"product\",\"method\":\"card\",\"status\":\"paid\",\"amount\":29,\"fee\":0.29,\"currency\":\"usd\",\"email\":null,\"message\":null,\"reference\":\"\(query)\",\"test\":false,\"created_at\":\"2026-11-13T18:04:11.000Z\"}]")
+            // two pages; the reference echoes the query so tests can check it
+            if query.contains("after=41") { return (200, "{\"data\":[\(payment(40, query))],\"has_more\":false,\"next\":null}") }
+            return (200, "{\"data\":[\(payment(42, query)),\(payment(41, query))],\"has_more\":true,\"next\":41}")
         case ("GET", "/api/v1/payments/42"):
             return (200, #"{"id":42,"type":"product","method":"card","status":"paid","amount":29,"fee":0.29,"currency":"usd","email":null,"message":null,"reference":null,"test":true,"created_at":"2026-11-13T18:04:11.000Z","item":"Pro","purchase_ip":null,"purchase_device":null,"dispute":{"id":"dp_1","status":"open","reason":null,"respond_by":null},"activity":[{"at":"2026-11-13T18:04:11.000Z","event":"license_activate","detail":"Pro","ip":null}],"evidence_pdf":"https://sendclap.com/dashboard/evidence/42/pdf"}"#)
-        case ("GET", "/api/v1/payments/7"): return (404, #"{"error":"payment not found"}"#)
+        case ("GET", "/api/v1/payments/7"): return (404, #"{"error":"payment not found","code":"not_found"}"#)
         case ("GET", "/api/v1/licenses"):
-            return (200, "[{\"key\":\"GOOD\",\"product\":\"Pro\",\"email\":\"\(query)\",\"activations\":1,\"max_activations\":3,\"disabled\":false,\"issued_at\":\"2026-11-13T18:04:11.000Z\"}]")
-        case ("GET", "/api/v1/members"), ("GET", "/api/v1/disputes"), ("GET", "/api/v1/products"), ("GET", "/api/v1/memberships"): return (200, "[]")
+            return (200, "{\"data\":[{\"key\":\"GOOD\",\"product\":\"Pro\",\"email\":\"\(query)\",\"activations\":1,\"max_activations\":3,\"disabled\":false,\"issued_at\":\"2026-11-13T18:04:11.000Z\"}],\"has_more\":false,\"next\":null}")
+        case ("GET", "/api/v1/members"), ("GET", "/api/v1/disputes"): return (200, #"{"data":[],"has_more":false,"next":null}"#)
+        case ("GET", "/api/v1/products"), ("GET", "/api/v1/memberships"): return (200, "[]")
         default: return (404, html)
         }
     }
@@ -103,7 +113,7 @@ final class LicenseClientTests: XCTestCase {
         XCTAssertEqual(r.product, ProductRef(id: 1, name: "Pro"))
         XCTAssertEqual(MockServer.last?.url?.absoluteString, "http://mock.test/api/v1/licenses/activate")
         XCTAssertEqual(MockServer.lastBody, #"{"instance_id":"dev-1","license_key":"GOOD"}"#)
-        XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "User-Agent"), "sendclap-swift/0.1.0")
+        XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "User-Agent"), "sendclap-swift/0.2.0")
         XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "Content-Type"), "application/json")
         XCTAssertNil(MockServer.last?.value(forHTTPHeaderField: "Authorization"))
     }
@@ -113,13 +123,27 @@ final class LicenseClientTests: XCTestCase {
         await assertThrows(.activationLimit("activation limit reached", license: full, product: ProductRef(id: 1, name: "Pro"))) {
             _ = try await self.client.activate(licenseKey: "FULL", instanceName: "dev-9")
         }
-        XCTAssertEqual(SendclapError.activationLimit("", license: full, product: ProductRef(id: nil, name: nil)).status, 409)
+        let limit = SendclapError.activationLimit("", license: full, product: ProductRef(id: nil, name: nil))
+        XCTAssertEqual(limit.status, 409)
+        XCTAssertEqual(limit.code, "activation_limit")
     }
 
     func testInvalidKeyAndMissingInstance() async {
         await assertThrows(.invalidLicense("license key not found")) { _ = try await self.client.activate(licenseKey: "BAD", instanceName: "dev-1") }
         await assertThrows(.invalidLicense("license key not found")) { _ = try await self.client.deactivate(licenseKey: "BAD", instanceId: "dev-1") }
-        await assertThrows(.api(status: 400, message: "instance_id is required")) { _ = try await self.client.activate(licenseKey: "GOOD", instanceName: "") }
+        await assertThrows(.api(status: 400, code: "bad_request", message: "instance_id is required")) { _ = try await self.client.activate(licenseKey: "GOOD", instanceName: "") }
+        XCTAssertEqual(SendclapError.invalidLicense("x").code, "license_not_found")
+    }
+
+    func testDisabledLicense() async throws {
+        await assertThrows(.licenseDisabled("this license key is disabled")) { _ = try await self.client.activate(licenseKey: "REFUNDED", instanceName: "dev-1") }
+        let e = SendclapError.licenseDisabled("x")
+        XCTAssertEqual(e.status, 403)
+        XCTAssertEqual(e.code, "license_disabled")
+    }
+
+    func testInstanceNotFound() async {
+        await assertThrows(.instanceNotFound("that instance is not activated")) { _ = try await self.client.deactivate(licenseKey: "GOOD", instanceId: "nope") }
     }
 
     func testValidateStatuses() async throws {
@@ -134,6 +158,8 @@ final class LicenseClientTests: XCTestCase {
         XCTAssertEqual(other.license?.maxActivations, 3)
         let bad = try await client.validate(licenseKey: "BAD", instanceId: "dev-1")
         XCTAssertEqual(bad, ValidateResult(valid: false, status: .invalid, license: nil, product: nil))
+        let refunded = try await client.validate(licenseKey: "REFUNDED", instanceId: "dev-1")
+        XCTAssertEqual(refunded, ValidateResult(valid: false, status: .disabled, license: nil, product: nil))
     }
 
     func testDeactivate() async throws {
@@ -143,7 +169,7 @@ final class LicenseClientTests: XCTestCase {
 
     func testHtmlNotFoundIsNotAnInvalidLicense() async {
         let wrong = LicenseClient(baseURL: "http://mock.test/wrong", session: MockServer.session)
-        await assertThrows(.api(status: 404, message: "HTTP 404")) { _ = try await wrong.validate(licenseKey: "GOOD") }
+        await assertThrows(.api(status: 404, code: "", message: "HTTP 404")) { _ = try await wrong.validate(licenseKey: "GOOD") }
     }
 
     func testConnectionRefusedIsNetworkError() async {
@@ -153,6 +179,7 @@ final class LicenseClientTests: XCTestCase {
         } catch let e as SendclapError {
             guard case .network = e else { return XCTFail("got \(e)") }
             XCTAssertEqual(e.status, 0)
+            XCTAssertEqual(e.code, "network_error")
         } catch {
             XCTFail("got \(error)")
         }
@@ -174,13 +201,13 @@ final class APIClientTests: XCTestCase {
         let sent = try JSONSerialization.jsonObject(with: Data(MockServer.lastBody!.utf8)) as? NSDictionary
         XCTAssertEqual(sent, ["type": "product", "product_id": 1, "email": "b@example.com"] as NSDictionary)
         XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "Authorization"), "Bearer sc_test")
-        XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "User-Agent"), "sendclap-swift/0.1.0")
+        XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "User-Agent"), "sendclap-swift/0.2.0")
     }
 
-    func testGetCheckoutHasNoURL() async throws {
+    func testGetCheckoutHasURL() async throws {
         let c = try await client.getCheckout(id: "0xabc")
         XCTAssertEqual(c.status, "pending")
-        XCTAssertNil(c.url)
+        XCTAssertEqual(c.url, "https://sendclap.com/checkout/0xabc")
         XCTAssertEqual(MockServer.last?.httpMethod, "GET")
     }
 
@@ -191,11 +218,24 @@ final class APIClientTests: XCTestCase {
         XCTAssertEqual(s.members.monthlyRecurring, 5)
     }
 
-    func testListPaymentsEncodesQuery() async throws {
+    func testListPaymentsReturnsAPage() async throws {
         let p = try await client.listPayments(status: "paid", email: "a+b@example.com", limit: 2)
-        XCTAssertEqual(p[0].reference, "?status=paid&email=a%2Bb%40example.com&limit=2")
-        XCTAssertEqual(p[0].fee, 0.29)
-        XCTAssertEqual(p[0].createdAt, "2026-11-13T18:04:11.000Z")
+        XCTAssertEqual(p.data[0].reference, "?status=paid&email=a%2Bb%40example.com&limit=2")
+        XCTAssertEqual(p.data[0].fee, 0.29)
+        XCTAssertEqual(p.data[0].createdAt, "2026-11-13T18:04:11.000Z")
+        XCTAssertTrue(p.hasMore)
+        XCTAssertEqual(p.next, 41)
+        let last = try await client.listPayments(after: p.next)
+        XCTAssertEqual(last.data[0].reference, "?after=41")
+        XCTAssertFalse(last.hasMore)
+        XCTAssertNil(last.next)
+    }
+
+    func testAllPaymentsFollowsNext() async throws {
+        var ids: [Int] = []
+        for try await p in client.allPayments(status: "paid", limit: 2) { ids.append(p.id) }
+        XCTAssertEqual(ids, [42, 41, 40])
+        XCTAssertEqual(MockServer.last?.url?.query, "status=paid&limit=2&after=41")
     }
 
     func testGetPayment() async throws {
@@ -203,20 +243,25 @@ final class APIClientTests: XCTestCase {
         XCTAssertEqual(p.item, "Pro")
         XCTAssertEqual(p.dispute?.id, "dp_1")
         XCTAssertEqual(p.activity.first?.event, "license_activate")
-        await assertThrows(.api(status: 404, message: "payment not found")) { _ = try await self.client.getPayment(id: 7) }
+        await assertThrows(.api(status: 404, code: "not_found", message: "payment not found")) { _ = try await self.client.getPayment(id: 7) }
     }
 
     func testListEndpoints() async throws {
         let licenses = try await client.listLicenses(email: "a@b.c")
-        XCTAssertEqual(licenses[0].email, "?email=a%40b.c")
+        XCTAssertEqual(licenses.data[0].email, "?email=a%40b.c")
+        var all = 0
+        for try await _ in client.allLicenses() { all += 1 }
+        for try await _ in client.allMembers() { all += 10 }
+        for try await _ in client.allDisputes() { all += 10 }
+        XCTAssertEqual(all, 1)
         let members = try await client.listMembers(), disputes = try await client.listDisputes()
         let products = try await client.listProducts(), memberships = try await client.listMemberships()
-        XCTAssertTrue(members.isEmpty && disputes.isEmpty && products.isEmpty && memberships.isEmpty)
+        XCTAssertTrue(members.data.isEmpty && disputes.data.isEmpty && products.isEmpty && memberships.isEmpty)
     }
 
     func testWrongKey() async {
         let wrong = APIClient(apiKey: "sc_wrong", baseURL: "http://mock.test", session: MockServer.session)
-        await assertThrows(.api(status: 401, message: "invalid API key")) { _ = try await wrong.me() }
+        await assertThrows(.api(status: 401, code: "invalid_api_key", message: "invalid API key")) { _ = try await wrong.me() }
     }
 
     func testGetCreatorWithoutKey() async throws {

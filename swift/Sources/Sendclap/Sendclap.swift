@@ -3,32 +3,50 @@ import Foundation
 import FoundationNetworking
 #endif
 
-public let sendclapVersion = "0.1.0"
+public let sendclapVersion = "0.2.0"
 
 /// Every error the SDK throws.
 public enum SendclapError: Error, LocalizedError, Equatable {
-    /// 404: the license key does not exist, or it was disabled after a refund or dispute.
+    /// `license_not_found` (404): the license key does not exist.
     case invalidLicense(String)
-    /// 409: the key is already activated on as many instances as it allows.
+    /// `license_disabled` (403): the key was disabled after a refund or dispute.
+    case licenseDisabled(String)
+    /// `instance_not_found` (404): deactivate for an instance that isn't activated.
+    case instanceNotFound(String)
+    /// `activation_limit` (409): the key is already activated on as many instances as it allows.
     case activationLimit(String, license: LicenseInfo, product: ProductRef)
     /// Any other non-2xx answer (400, 401, 404, 5xx, HTML error pages) or an unreadable response.
-    case api(status: Int, message: String)
+    /// `code` is the server's code such as `invalid_api_key` or `not_found`, empty when the reply wasn't a Sendclap error.
+    case api(status: Int, code: String, message: String)
     /// No HTTP response: DNS, connection, TLS failure or timeout.
     case network(String)
 
     /// The HTTP status, 0 for network errors.
     public var status: Int {
         switch self {
-        case .invalidLicense: return 404
+        case .invalidLicense, .instanceNotFound: return 404
+        case .licenseDisabled: return 403
         case .activationLimit: return 409
-        case .api(let status, _): return status
+        case .api(let status, _, _): return status
         case .network: return 0
+        }
+    }
+
+    /// The server's machine-readable code; `network_error` with no reply, empty for non-Sendclap replies.
+    public var code: String {
+        switch self {
+        case .invalidLicense: return "license_not_found"
+        case .licenseDisabled: return "license_disabled"
+        case .instanceNotFound: return "instance_not_found"
+        case .activationLimit: return "activation_limit"
+        case .api(_, let code, _): return code
+        case .network: return "network_error"
         }
     }
 
     public var message: String {
         switch self {
-        case .invalidLicense(let m), .activationLimit(let m, _, _), .api(_, let m), .network(let m): return m
+        case .invalidLicense(let m), .licenseDisabled(let m), .instanceNotFound(let m), .activationLimit(let m, _, _), .api(_, _, let m), .network(let m): return m
         }
     }
 
@@ -95,22 +113,50 @@ struct Transport {
             // HTML error pages (unknown routes, proxies) fall through to .api with "HTTP <status>".
             let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             let message = obj?["error"] as? String ?? "HTTP \(status)"
-            if status == 404, obj?["valid"] as? Bool == false { throw SendclapError.invalidLicense(message) }
-            if status == 409, obj?["activated"] as? Bool == false, let r = try? Transport.decoder.decode(DeactivateResult.self, from: data) {
-                throw SendclapError.activationLimit(message, license: r.license, product: r.product)
+            let code = obj?["code"] as? String ?? ""
+            switch code {
+            case "license_not_found": throw SendclapError.invalidLicense(message)
+            case "license_disabled": throw SendclapError.licenseDisabled(message)
+            case "instance_not_found": throw SendclapError.instanceNotFound(message)
+            case "activation_limit":
+                if let r = try? Transport.decoder.decode(DeactivateResult.self, from: data) {
+                    throw SendclapError.activationLimit(message, license: r.license, product: r.product)
+                }
+            default: break
             }
-            throw SendclapError.api(status: status, message: message)
+            throw SendclapError.api(status: status, code: code, message: message)
         }
         do {
             return try Transport.decoder.decode(T.self, from: data)
         } catch {
-            throw SendclapError.api(status: status, message: "invalid JSON response")
+            throw SendclapError.api(status: status, code: "", message: "invalid JSON response")
         }
     }
 }
 
 private func escapePath(_ s: String) -> String {
     s.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-._~"))) ?? s
+}
+
+/// Streams every item of a paged list, fetching the next page with the previous page's `next` until `hasMore` is false.
+private func paginate<T>(_ fetch: @escaping (Int?) async throws -> Page<T>) -> AsyncThrowingStream<T, Error> {
+    AsyncThrowingStream { continuation in
+        let task = Task {
+            do {
+                var after: Int? = nil
+                while true {
+                    let page = try await fetch(after)
+                    for item in page.data { continuation.yield(item) }
+                    guard page.hasMore, let next = page.next else { break }
+                    after = next
+                }
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: error)
+            }
+        }
+        continuation.onTermination = { _ in task.cancel() }
+    }
 }
 
 /// License keys from the app you ship. Needs no API key: activate an instance, validate on start, deactivate to free a seat.
@@ -130,23 +176,25 @@ public final class LicenseClient {
     public static func instanceName() -> String { ProcessInfo.processInfo.hostName }
 
     /// Registers this instance against the key. Activating the same instance again counts once.
-    /// Throws `.invalidLicense`, `.activationLimit`, `.api` or `.network`.
+    /// Throws `.invalidLicense`, `.licenseDisabled`, `.activationLimit`, `.api` or `.network`.
     public func activate(licenseKey: String, instanceName: String) async throws -> ActivateResult {
         try await t.send("POST", "/licenses/activate", body: body(licenseKey, instanceName))
     }
 
     /// Checks the key, and with `instanceId` that this instance is activated. An unknown or disabled key returns
-    /// status `.invalid` instead of throwing, so a thrown error means "could not check" (offline: use your grace period).
+    /// status `.invalid` or `.disabled` instead of throwing, so a thrown error means "could not check" (offline: use your grace period).
     public func validate(licenseKey: String, instanceId: String? = nil) async throws -> ValidateResult {
         do {
             let r: ValidateResponse = try await t.send("POST", "/licenses/validate", body: body(licenseKey, instanceId))
             return ValidateResult(valid: r.valid, status: r.valid ? .active : .notActivated, license: r.license, product: r.product)
         } catch SendclapError.invalidLicense {
             return ValidateResult(valid: false, status: .invalid, license: nil, product: nil)
+        } catch SendclapError.licenseDisabled {
+            return ValidateResult(valid: false, status: .disabled, license: nil, product: nil)
         }
     }
 
-    /// Releases an instance, freeing one activation.
+    /// Releases an instance, freeing one activation. Throws `.instanceNotFound` if it wasn't activated.
     public func deactivate(licenseKey: String, instanceId: String) async throws -> DeactivateResult {
         try await t.send("POST", "/licenses/deactivate", body: body(licenseKey, instanceId))
     }
@@ -171,25 +219,46 @@ public final class APIClient {
         try await t.send("POST", "/checkouts", body: Transport.encoder.encode(params))
     }
 
-    /// The checkout's `url` is only returned by `createCheckout`.
     public func getCheckout(id: String) async throws -> Checkout { try await t.send("GET", "/checkouts/" + escapePath(id)) }
 
     public func me() async throws -> Stats { try await t.send("GET", "/me") }
 
-    /// - Parameter limit: 1 to 500, the server defaults to 50.
-    public func listPayments(status: String? = nil, type: String? = nil, email: String? = nil, limit: Int? = nil) async throws -> [Payment] {
-        try await t.send("GET", "/payments", query: [("status", status), ("type", type), ("email", email), ("limit", limit.map(String.init))])
+    // Lists are pages, newest first. `limit` is 1 to 500 (the server defaults to 50 for payments, 500 otherwise) and `after`
+    // is the previous page's `next`. The `all…` streams follow `next`: `for try await p in api.allPayments(status: "paid")`.
+
+    public func listPayments(status: String? = nil, type: String? = nil, email: String? = nil, limit: Int? = nil, after: Int? = nil) async throws -> Page<Payment> {
+        try await t.send("GET", "/payments", query: [("status", status), ("type", type), ("email", email), ("limit", limit.map(String.init)), ("after", after.map(String.init))])
+    }
+
+    public func allPayments(status: String? = nil, type: String? = nil, email: String? = nil, limit: Int? = nil) -> AsyncThrowingStream<Payment, Error> {
+        paginate { try await self.listPayments(status: status, type: type, email: email, limit: limit, after: $0) }
     }
 
     public func getPayment(id: Int) async throws -> PaymentDetail { try await t.send("GET", "/payments/\(id)") }
 
-    public func listMembers() async throws -> [Member] { try await t.send("GET", "/members") }
-
-    public func listLicenses(email: String? = nil) async throws -> [IssuedLicense] {
-        try await t.send("GET", "/licenses", query: [("email", email)])
+    public func listMembers(limit: Int? = nil, after: Int? = nil) async throws -> Page<Member> {
+        try await t.send("GET", "/members", query: [("limit", limit.map(String.init)), ("after", after.map(String.init))])
     }
 
-    public func listDisputes() async throws -> [Dispute] { try await t.send("GET", "/disputes") }
+    public func allMembers(limit: Int? = nil) -> AsyncThrowingStream<Member, Error> {
+        paginate { try await self.listMembers(limit: limit, after: $0) }
+    }
+
+    public func listLicenses(email: String? = nil, limit: Int? = nil, after: Int? = nil) async throws -> Page<IssuedLicense> {
+        try await t.send("GET", "/licenses", query: [("email", email), ("limit", limit.map(String.init)), ("after", after.map(String.init))])
+    }
+
+    public func allLicenses(email: String? = nil, limit: Int? = nil) -> AsyncThrowingStream<IssuedLicense, Error> {
+        paginate { try await self.listLicenses(email: email, limit: limit, after: $0) }
+    }
+
+    public func listDisputes(limit: Int? = nil, after: Int? = nil) async throws -> Page<Dispute> {
+        try await t.send("GET", "/disputes", query: [("limit", limit.map(String.init)), ("after", after.map(String.init))])
+    }
+
+    public func allDisputes(limit: Int? = nil) -> AsyncThrowingStream<Dispute, Error> {
+        paginate { try await self.listDisputes(limit: limit, after: $0) }
+    }
 
     public func listProducts() async throws -> [Product] { try await t.send("GET", "/products") }
 

@@ -9,6 +9,6 @@ final class NetworkException extends SendclapException
 {
     public function __construct(string $message)
     {
-        parent::__construct(0, $message);
+        parent::__construct(0, $message, 'network_error');
     }
 }

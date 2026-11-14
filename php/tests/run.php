@@ -7,7 +7,9 @@ declare(strict_types=1);
 
 use Sendclap\ActivationLimitException;
 use Sendclap\ApiClient;
+use Sendclap\DisabledLicenseException;
 use Sendclap\Http;
+use Sendclap\InstanceNotFoundException;
 use Sendclap\InvalidLicenseException;
 use Sendclap\LicenseClient;
 use Sendclap\NetworkException;
@@ -90,14 +92,14 @@ test('activate', function () use ($lic) {
     eq('POST', $req['method']);
     eq('/api/v1/licenses/activate', $req['uri']);
     eq(['license_key' => 'GOOD', 'instance_id' => 'dev-1'], $req['body']);
-    eq('sendclap-php/0.1.0', $req['headers']['user-agent']);
+    eq('sendclap-php/0.2.0', $req['headers']['user-agent']);
     eq('application/json', $req['headers']['content-type']);
     eq(false, isset($req['headers']['authorization']));
 });
 
 test('activation limit', function () use ($lic) {
     $e = throws(ActivationLimitException::class, fn () => $lic->activate('FULL', 'dev-9'));
-    eq(409, $e->status);
+    eq([409, 'activation_limit'], [$e->status, $e->errorCode]);
     eq(3, $e->license->activations);
     eq(1, $e->product->id);
     eq('activation limit reached', $e->getMessage());
@@ -105,13 +107,19 @@ test('activation limit', function () use ($lic) {
 
 test('activate invalid key', function () use ($lic) {
     $e = throws(InvalidLicenseException::class, fn () => $lic->activate('BAD', 'dev-1'));
-    eq(404, $e->status);
+    eq([404, 'license_not_found'], [$e->status, $e->errorCode]);
     eq('license key not found', $e->getMessage());
+});
+
+test('activate disabled key', function () use ($lic) {
+    $e = throws(DisabledLicenseException::class, fn () => $lic->activate('REFUNDED', 'dev-1'));
+    eq(false, $e instanceof InvalidLicenseException);
+    eq([403, 'license_disabled'], [$e->status, $e->errorCode]);
 });
 
 test('activate missing instance', function () use ($lic) {
     $e = throws(SendclapException::class, fn () => $lic->activate('GOOD', ''));
-    eq(400, $e->status);
+    eq([400, 'bad_request'], [$e->status, $e->errorCode]);
     eq('instance_id is required', $e->getMessage());
 });
 
@@ -124,22 +132,26 @@ test('validate', function () use ($lic) {
     eq([false, 'not_activated', 'GOOD'], [$r->valid, $r->status, $r->license->key]);
     $r = $lic->validate('BAD', 'dev-1');
     eq([false, 'invalid', null, null], [$r->valid, $r->status, $r->license, $r->product]);
+    $r = $lic->validate('REFUNDED', 'dev-1');
+    eq([false, 'disabled', null, null], [$r->valid, $r->status, $r->license, $r->product]);
 });
 
 test('deactivate', function () use ($lic) {
     eq(0, $lic->deactivate('GOOD', 'dev-1')->license->activations);
     throws(InvalidLicenseException::class, fn () => $lic->deactivate('BAD', 'dev-1'));
+    $e = throws(InstanceNotFoundException::class, fn () => $lic->deactivate('GOOD', 'nope'));
+    eq([404, 'instance_not_found'], [$e->status, $e->errorCode]);
 });
 
 test('html 404 is not an invalid license', function () use ($base) {
     $e = throws(SendclapException::class, fn () => (new LicenseClient($base . '/nope'))->validate('GOOD'));
     eq(SendclapException::class, get_class($e));
-    eq([404, 'HTTP 404'], [$e->status, $e->getMessage()]);
+    eq([404, '', 'HTTP 404'], [$e->status, $e->errorCode, $e->getMessage()]);
 });
 
 test('network error', function () {
     $e = throws(NetworkException::class, fn () => (new LicenseClient('http://127.0.0.1:1', 2.0))->validate('GOOD'));
-    eq(0, $e->status);
+    eq([0, 'network_error'], [$e->status, $e->errorCode]);
 });
 
 test('invalid json', function () use ($base) {
@@ -153,20 +165,34 @@ test('checkouts', function () use ($api) {
     $req = last();
     eq(['type' => 'product', 'product_id' => 1, 'email' => 'buyer@example.com'], $req['body']);
     eq('Bearer sc_test', $req['headers']['authorization']);
-    eq('pending', $api->getCheckout('0xabc')['status']);
+    $g = $api->getCheckout('0xabc');
+    eq(['pending', 'http://x/checkout/0xabc'], [$g['status'], $g['url']]);
 });
 
-test('payments', function () use ($api) {
-    eq('paid', $api->listPayments(['status' => 'paid', 'limit' => 2])[0]['status']);
+test('payments page', function () use ($api) {
+    $page = $api->listPayments(['status' => 'paid', 'limit' => 2]);
     eq('/api/v1/payments?status=paid&limit=2', last()['uri']);
+    eq([[['id' => 3], ['id' => 2]], true, 2], [$page->data, $page->hasMore, $page->next]);
+    $rest = $api->listPayments(['after' => $page->next]);
+    eq([[['id' => 1]], false, null], [$rest->data, $rest->hasMore, $rest->next]);
     eq('Pro', $api->getPayment(42)['item']);
     $e = throws(SendclapException::class, fn () => $api->getPayment(7));
-    eq([404, 'payment not found'], [$e->status, $e->getMessage()]);
+    eq([404, 'not_found', 'payment not found'], [$e->status, $e->errorCode, $e->getMessage()]);
+});
+
+test('all payments follows next', function () use ($api) {
+    $ids = [];
+    foreach ($api->allPayments(['status' => 'paid']) as $p) {
+        $ids[] = $p['id'];
+    }
+    eq([3, 2, 1], $ids);
+    eq('/api/v1/payments?after=2&status=paid', last()['uri']);
+    eq(1, count(iterator_to_array($api->allMembers(), false)));
 });
 
 test('unauthorized', function () use ($base) {
     $e = throws(SendclapException::class, fn () => (new ApiClient('sc_wrong', $base))->me());
-    eq([401, 'invalid API key'], [$e->status, $e->getMessage()]);
+    eq([401, 'invalid_api_key', 'invalid API key'], [$e->status, $e->errorCode, $e->getMessage()]);
 });
 
 test('creator without key', function () use ($base) {

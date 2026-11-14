@@ -4,7 +4,11 @@ declare(strict_types=1);
 
 namespace Sendclap;
 
-/** The key does not exist, or was disabled after a refund or dispute (the server can't tell them apart). */
+/** The license key does not exist (license_not_found). */
 final class InvalidLicenseException extends SendclapException
 {
+    public function __construct(int $status, string $message)
+    {
+        parent::__construct($status, $message, 'license_not_found');
+    }
 }

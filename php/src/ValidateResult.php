@@ -6,7 +6,7 @@ namespace Sendclap;
 
 final class ValidateResult
 {
-    /** @param string $status "active", "not_activated" or "invalid" (license and product are null then) */
+    /** @param string $status "active", "not_activated", "invalid" (unknown key) or "disabled" (refunded or disputed); license and product are null for the last two */
     public function __construct(
         public readonly bool $valid,
         public readonly string $status,

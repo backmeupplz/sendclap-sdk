@@ -7,17 +7,18 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Callable, Dict, Generic, Iterator, List, Optional, TypedDict, TypeVar
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 DEFAULT_BASE_URL = "https://sendclap.com"
 USER_AGENT = f"sendclap-python/{__version__}"
 
 __all__ = [
     "LicenseClient", "ApiClient", "instance_name",
-    "SendclapError", "InvalidLicenseError", "ActivationLimitError", "NetworkError",
+    "SendclapError", "InvalidLicenseError", "DisabledLicenseError", "InstanceNotFoundError",
+    "ActivationLimitError", "NetworkError",
     "ActivateResult", "ValidateResult", "DeactivateResult", "LicenseInfo", "ProductRef",
-    "Checkout", "Totals", "Stats", "Payment", "PaymentDetail", "Member", "IssuedLicense",
+    "Page", "Checkout", "Totals", "Stats", "Payment", "PaymentDetail", "Member", "IssuedLicense",
     "Dispute", "Product", "Membership", "Creator",
 ]
 
@@ -25,23 +26,37 @@ __all__ = [
 # ---- errors ----
 
 class SendclapError(Exception):
-    """Any failed request. `status` is the HTTP status, 0 when no response arrived."""
+    """Any failed request.
 
-    def __init__(self, status: int, message: str) -> None:
+    `status` is the HTTP status (0 when no response arrived) and `code` the server's machine-readable
+    code, such as "invalid_api_key" or "not_found" ("" when the reply wasn't a Sendclap error,
+    "network_error" with no reply).
+    """
+
+    def __init__(self, status: int, message: str, code: str = "") -> None:
         super().__init__(message)
         self.status = status
         self.message = message
+        self.code = code
 
 
 class InvalidLicenseError(SendclapError):
-    """The key does not exist, or was disabled after a refund or dispute (the server can't tell them apart)."""
+    """The license key does not exist (license_not_found)."""
+
+
+class DisabledLicenseError(SendclapError):
+    """The key exists but was disabled after a refund or dispute (license_disabled)."""
+
+
+class InstanceNotFoundError(SendclapError):
+    """Deactivate was called for an instance that isn't activated (instance_not_found)."""
 
 
 class ActivationLimitError(SendclapError):
-    """The key is already activated on its maximum number of instances."""
+    """The key is already activated on its maximum number of instances (activation_limit)."""
 
     def __init__(self, status: int, message: str, license: LicenseInfo, product: ProductRef) -> None:
-        super().__init__(status, message)
+        super().__init__(status, message, "activation_limit")
         self.license = license
         self.product = product
 
@@ -50,7 +65,7 @@ class NetworkError(SendclapError):
     """No HTTP response: DNS, refused connection, TLS or timeout."""
 
     def __init__(self, message: str) -> None:
-        super().__init__(0, message)
+        super().__init__(0, message, "network_error")
 
 
 # ---- license results ----
@@ -78,7 +93,7 @@ class ActivateResult:
 @dataclass(frozen=True)
 class ValidateResult:
     valid: bool
-    status: str  # "active", "not_activated" or "invalid"
+    status: str  # "active", "not_activated", "invalid" (unknown key) or "disabled" (refunded or disputed)
     license: Optional[LicenseInfo] = None
     product: Optional[ProductRef] = None
 
@@ -91,7 +106,7 @@ class DeactivateResult:
 
 # ---- API response shapes (plain dicts at runtime) ----
 
-class _CheckoutBase(TypedDict):
+class Checkout(TypedDict):
     id: str
     status: str
     type: str
@@ -99,10 +114,17 @@ class _CheckoutBase(TypedDict):
     currency: str
     method: str
     email: Optional[str]
+    url: str  # where to send the customer to pay
 
 
-class Checkout(_CheckoutBase, total=False):
-    url: str  # only returned by create_checkout
+T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class Page(Generic[T]):
+    data: List[T]
+    has_more: bool
+    next: Optional[int]  # pass as `after` to get the following page
 
 
 class Totals(TypedDict):
@@ -254,11 +276,16 @@ class _Http:
             return parsed
         d = parsed if isinstance(parsed, dict) else {}
         msg = d["error"] if isinstance(d.get("error"), str) else f"HTTP {status}"
-        if status == 404 and d.get("valid") is False:
-            raise InvalidLicenseError(status, msg)
-        if status == 409 and d.get("activated") is False:
+        code = d["code"] if isinstance(d.get("code"), str) else ""
+        if code == "license_not_found":
+            raise InvalidLicenseError(status, msg, code)
+        if code == "license_disabled":
+            raise DisabledLicenseError(status, msg, code)
+        if code == "instance_not_found":
+            raise InstanceNotFoundError(status, msg, code)
+        if code == "activation_limit":
             raise ActivationLimitError(status, msg, _license(d), _product(d))
-        raise SendclapError(status, msg)
+        raise SendclapError(status, msg, code)
 
 
 def _license(d: Dict[str, Any]) -> LicenseInfo:
@@ -298,11 +325,13 @@ class LicenseClient:
         return ActivateResult(instance_id=d["instance_id"], license=_license(d), product=_product(d))
 
     def validate(self, license_key: str, instance_id: Optional[str] = None) -> ValidateResult:
-        """Never raises for a bad key: returns status "invalid". Raises NetworkError when offline."""
+        """Never raises for a bad key: returns status "invalid" or "disabled". Raises NetworkError when offline."""
         try:
             d = self._post("validate", license_key, instance_id)
         except InvalidLicenseError:
             return ValidateResult(valid=False, status="invalid")
+        except DisabledLicenseError:
+            return ValidateResult(valid=False, status="disabled")
         valid = d.get("valid") is True
         return ValidateResult(valid=valid, status="active" if valid else "not_activated",
                               license=_license(d), product=_product(d))
@@ -310,6 +339,16 @@ class LicenseClient:
     def deactivate(self, license_key: str, instance_id: str) -> DeactivateResult:
         d = self._post("deactivate", license_key, instance_id)
         return DeactivateResult(license=_license(d), product=_product(d))
+
+
+def _paginate(fetch: Callable[..., Page[T]], filters: Dict[str, Any]) -> Iterator[T]:
+    after = None
+    while True:
+        page = fetch(**filters, after=after)
+        yield from page.data
+        if not page.has_more or page.next is None:
+            return
+        after = page.next
 
 
 def _seg(s: Any) -> str:
@@ -335,21 +374,39 @@ class ApiClient:
     def me(self) -> Stats:
         return self._http.request("GET", "/me")
 
-    def list_payments(self, status: Optional[str] = None, type: Optional[str] = None,
-                      email: Optional[str] = None, limit: Optional[int] = None) -> List[Payment]:
-        return self._http.request("GET", "/payments", query={"status": status, "type": type, "email": email, "limit": limit})
+    def _page(self, path: str, query: Dict[str, Any]) -> Page:
+        d = self._http.request("GET", path, query=query)
+        return Page(data=d["data"], has_more=d["has_more"], next=d["next"])
+
+    # Lists are pages: `limit` is at most 500, `after` is the previous page's `next`. The all_* generators follow `next`.
+    def list_payments(self, status: Optional[str] = None, type: Optional[str] = None, email: Optional[str] = None,
+                      limit: Optional[int] = None, after: Optional[int] = None) -> Page[Payment]:
+        return self._page("/payments", {"status": status, "type": type, "email": email, "limit": limit, "after": after})
 
     def get_payment(self, id: int) -> PaymentDetail:
         return self._http.request("GET", f"/payments/{_seg(id)}")
 
-    def list_members(self) -> List[Member]:
-        return self._http.request("GET", "/members")
+    def list_members(self, limit: Optional[int] = None, after: Optional[int] = None) -> Page[Member]:
+        return self._page("/members", {"limit": limit, "after": after})
 
-    def list_licenses(self, email: Optional[str] = None) -> List[IssuedLicense]:
-        return self._http.request("GET", "/licenses", query={"email": email})
+    def list_licenses(self, email: Optional[str] = None, limit: Optional[int] = None,
+                      after: Optional[int] = None) -> Page[IssuedLicense]:
+        return self._page("/licenses", {"email": email, "limit": limit, "after": after})
 
-    def list_disputes(self) -> List[Dispute]:
-        return self._http.request("GET", "/disputes")
+    def list_disputes(self, limit: Optional[int] = None, after: Optional[int] = None) -> Page[Dispute]:
+        return self._page("/disputes", {"limit": limit, "after": after})
+
+    def all_payments(self, **filters: Any) -> Iterator[Payment]:
+        return _paginate(self.list_payments, filters)
+
+    def all_members(self, **filters: Any) -> Iterator[Member]:
+        return _paginate(self.list_members, filters)
+
+    def all_licenses(self, **filters: Any) -> Iterator[IssuedLicense]:
+        return _paginate(self.list_licenses, filters)
+
+    def all_disputes(self, **filters: Any) -> Iterator[Dispute]:
+        return _paginate(self.list_disputes, filters)
 
     def list_products(self) -> List[Product]:
         return self._http.request("GET", "/products")

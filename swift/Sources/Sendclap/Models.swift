@@ -26,16 +26,18 @@ public enum LicenseStatus: String, Codable, Sendable {
     case active
     /// The key exists but this instance is not activated on it.
     case notActivated = "not_activated"
-    /// The key does not exist, or it was disabled after a refund or dispute.
+    /// The key does not exist.
     case invalid
+    /// The key exists but was disabled after a refund or dispute.
+    case disabled
 }
 
 public struct ValidateResult: Equatable, Sendable {
     public let valid: Bool
     public let status: LicenseStatus
-    /// nil when `status` is `.invalid`.
+    /// nil when `status` is `.invalid` or `.disabled`.
     public let license: LicenseInfo?
-    /// nil when `status` is `.invalid`.
+    /// nil when `status` is `.invalid` or `.disabled`.
     public let product: ProductRef?
 }
 
@@ -86,8 +88,15 @@ public struct Checkout: Codable, Equatable, Sendable {
     public let currency: String
     public let method: String
     public let email: String?
-    /// Where to send the customer. Only returned by `createCheckout`.
-    public let url: String?
+    /// Where to send the customer to pay.
+    public let url: String
+}
+
+/// One page of a list, newest first. When `hasMore` is true, pass `next` as `after` for the following page.
+public struct Page<T: Decodable & Sendable>: Decodable, Sendable {
+    public let data: [T]
+    public let hasMore: Bool
+    public let next: Int?
 }
 
 public struct Totals: Codable, Equatable, Sendable {

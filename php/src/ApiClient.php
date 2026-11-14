@@ -34,10 +34,19 @@ final class ApiClient
         return $this->http->request('GET', '/me');
     }
 
-    /** @param array{status?: string, type?: string, email?: string, limit?: int} $filter */
-    public function listPayments(array $filter = []): array
+    // Lists are pages, newest first. `limit` is at most 500 and `after` is the previous page's `next`.
+    // The all*() generators follow `next`: foreach ($api->allPayments(['status' => 'paid']) as $payment).
+
+    /** @param array{status?: string, type?: string, email?: string, limit?: int, after?: int} $filter */
+    public function listPayments(array $filter = []): Page
     {
-        return $this->http->request('GET', '/payments', null, $filter);
+        return Page::from($this->http->request('GET', '/payments', null, $filter));
+    }
+
+    /** @param array{status?: string, type?: string, email?: string, limit?: int} $filter */
+    public function allPayments(array $filter = []): \Generator
+    {
+        return $this->paginate(fn (?int $after) => $this->listPayments(['after' => $after] + $filter));
     }
 
     public function getPayment(int $id): array
@@ -45,19 +54,40 @@ final class ApiClient
         return $this->http->request('GET', "/payments/$id");
     }
 
-    public function listMembers(): array
+    /** @param array{limit?: int, after?: int} $page */
+    public function listMembers(array $page = []): Page
     {
-        return $this->http->request('GET', '/members');
+        return Page::from($this->http->request('GET', '/members', null, $page));
     }
 
-    public function listLicenses(?string $email = null): array
+    /** @param array{limit?: int} $page */
+    public function allMembers(array $page = []): \Generator
     {
-        return $this->http->request('GET', '/licenses', null, ['email' => $email]);
+        return $this->paginate(fn (?int $after) => $this->listMembers(['after' => $after] + $page));
     }
 
-    public function listDisputes(): array
+    /** @param array{email?: string, limit?: int, after?: int} $filter */
+    public function listLicenses(array $filter = []): Page
     {
-        return $this->http->request('GET', '/disputes');
+        return Page::from($this->http->request('GET', '/licenses', null, $filter));
+    }
+
+    /** @param array{email?: string, limit?: int} $filter */
+    public function allLicenses(array $filter = []): \Generator
+    {
+        return $this->paginate(fn (?int $after) => $this->listLicenses(['after' => $after] + $filter));
+    }
+
+    /** @param array{limit?: int, after?: int} $page */
+    public function listDisputes(array $page = []): Page
+    {
+        return Page::from($this->http->request('GET', '/disputes', null, $page));
+    }
+
+    /** @param array{limit?: int} $page */
+    public function allDisputes(array $page = []): \Generator
+    {
+        return $this->paginate(fn (?int $after) => $this->listDisputes(['after' => $after] + $page));
     }
 
     public function listProducts(): array
@@ -74,5 +104,16 @@ final class ApiClient
     public function getCreator(string $handle): array
     {
         return $this->http->request('GET', '/creators/' . rawurlencode($handle));
+    }
+
+    /** @param callable(?int): Page $fetch */
+    private function paginate(callable $fetch): \Generator
+    {
+        $after = null;
+        do {
+            $page = $fetch($after);
+            yield from $page->data;
+            $after = $page->next;
+        } while ($page->hasMore && $after !== null);
     }
 }

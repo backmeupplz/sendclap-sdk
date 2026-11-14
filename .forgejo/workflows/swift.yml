@@ -1,0 +1,19 @@
+name: swift
+# Its own workflow so the ~30 s Swift build only runs when the Swift package changes.
+on:
+  push:
+    branches: [main]
+    paths: ['swift/**', 'Package.swift', '.forgejo/workflows/swift.yml']
+  pull_request:
+    paths: ['swift/**', 'Package.swift', '.forgejo/workflows/swift.yml']
+  workflow_dispatch:
+concurrency:
+  group: swift-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  swift:
+    runs-on: macos-latest # Swift needs a Mac either way
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - run: swift test --scratch-path "$RUNNER_TOOL_CACHE/sendclap-sdk-swift"

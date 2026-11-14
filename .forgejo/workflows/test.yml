@@ -78,13 +78,6 @@ jobs:
         with: { dotnet-version: '10.0.x' }
       - run: dotnet test --nologo -v q
 
-  swift:
-    runs-on: macos-latest # Swift needs a Mac either way
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { persist-credentials: false }
-      - run: swift test --scratch-path "$RUNNER_TOOL_CACHE/sendclap-sdk-swift"
-
   php:
     runs-on: ${{ (github.event_name != 'pull_request' || contains(fromJSON('["backmeupplz","renovate","claude"]'), github.event.pull_request.user.login)) && 'macos-latest' || 'ubuntu-latest' }}
     steps:

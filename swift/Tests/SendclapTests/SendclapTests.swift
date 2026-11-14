@@ -119,7 +119,7 @@ final class LicenseClientTests: XCTestCase {
         XCTAssertEqual(r.product, ProductRef(id: 1, name: "Pro"))
         XCTAssertEqual(MockServer.last?.url?.absoluteString, "http://mock.test/api/v1/licenses/activate")
         XCTAssertEqual(MockServer.lastBody, #"{"instance_id":"dev-1","license_key":"GOOD"}"#)
-        XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "User-Agent"), "sendclap-swift/0.2.0")
+        XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "User-Agent"), "sendclap-swift/0.3.0")
         XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "Content-Type"), "application/json")
         XCTAssertNil(MockServer.last?.value(forHTTPHeaderField: "Authorization"))
     }
@@ -207,7 +207,7 @@ final class APIClientTests: XCTestCase {
         let sent = try JSONSerialization.jsonObject(with: Data(MockServer.lastBody!.utf8)) as? NSDictionary
         XCTAssertEqual(sent, ["type": "product", "product_id": 1, "email": "b@example.com"] as NSDictionary)
         XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "Authorization"), "Bearer sc_test")
-        XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "User-Agent"), "sendclap-swift/0.2.0")
+        XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "User-Agent"), "sendclap-swift/0.3.0")
     }
 
     func testGetCheckoutHasURL() async throws {

@@ -6,7 +6,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 current=$(sed -n 's/^  "version": "\(.*\)",$/\1/p' js/package.json | head -1)
-files="js/package.json js/src/index.ts python/pyproject.toml python/src/sendclap/__init__.py go/sendclap.go rust/Cargo.toml rust/src/lib.rs dotnet/src/Sendclap/Sendclap.csproj dotnet/src/Sendclap/Sendclap.cs php/src/Http.php"
+files="js/package.json js/src/index.ts python/pyproject.toml python/src/sendclap/__init__.py go/sendclap.go rust/Cargo.toml rust/src/lib.rs dotnet/src/Sendclap/Sendclap.csproj dotnet/src/Sendclap/Sendclap.cs php/src/Http.php swift/Sources/Sendclap/Sendclap.swift"
 case "${1:-}" in
   "") echo "$current" ;;
   check)
@@ -15,7 +15,7 @@ case "${1:-}" in
     exit $bad ;;
   bump)
     new=${2#v}
-    for f in $files js/package-lock.json rust/Cargo.lock go/sendclap_test.go python/tests/test_sendclap.py js/test/sendclap.test.mjs rust/tests/client.rs php/tests/run.php dotnet/tests/Sendclap.Tests/ClientTests.cs; do
+    for f in $files js/package-lock.json rust/Cargo.lock go/sendclap_test.go python/tests/test_sendclap.py js/test/sendclap.test.mjs rust/tests/client.rs php/tests/run.php dotnet/tests/Sendclap.Tests/ClientTests.cs swift/Tests/SendclapTests/SendclapTests.swift; do
       # only the sendclap lines in the lockfiles: other packages may share the old version number
       case "$f" in
         rust/Cargo.lock) awk -v o="$current" -v n="$new" '/^name = "sendclap"$/{s=1} s&&$0=="version = \""o"\""{$0="version = \""n"\"";s=0} {print}' "$f" > "$f.tmp" && mv "$f.tmp" "$f" ;;

@@ -1,0 +1,51 @@
+# A release on git.borodutch.com (`tea release create --repo backmeupplz/sendclap-sdk --tag vX.Y.Z --title vX.Y.Z`,
+# after `scripts/version.sh bump X.Y.Z` is merged) publishes every SDK:
+#   Swift      the vX.Y.Z tag itself (Swift Package Manager resolves git tags)
+#   Go         a go/vX.Y.Z tag, because the module lives in go/; the Go proxy is asked to fetch it
+#   npm, PyPI, crates.io, NuGet   .github/workflows/release.yml on the GitHub mirror, fired by the GitHub Release this job
+#              creates: those registries take trusted publishing only from GitHub-hosted CI, so no tokens are stored
+#   Packagist  updates from the GitHub mirror's tag on its own
+# GH_MIRROR_TOKEN (a GitHub PAT) creates the GitHub Release; the GitHub repo is a read-only push mirror.
+name: release
+on:
+  release:
+    types: [published]
+permissions:
+  contents: write
+concurrency: release
+env:
+  GH_REPO: backmeupplz/sendclap-sdk
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Every package says the release's version
+        run: scripts/version.sh check "$GITHUB_REF_NAME"
+      - name: go/vX.Y.Z tag for the Go module in go/
+        env:
+          FJ_TOKEN: ${{ github.token }}
+        run: |
+          jq -n --arg t "go/$GITHUB_REF_NAME" --arg s "$GITHUB_SHA" '{tag_name: $t, target: $s}' |
+            curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: token $FJ_TOKEN" -H 'Content-Type: application/json' \
+              -d @- "$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY/tags" | grep -qE '^(201|409)$'
+      - run: command -v gh || { sudo apt-get update && sudo apt-get install -y gh; }
+      - name: Wait for both tags on the GitHub mirror
+        env:
+          GH_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
+        run: |
+          for i in $(seq 60); do
+            gh api "repos/$GH_REPO/git/ref/tags/$GITHUB_REF_NAME" >/dev/null 2>&1 &&
+              gh api "repos/$GH_REPO/git/ref/tags/go/$GITHUB_REF_NAME" >/dev/null 2>&1 && exit 0
+            sleep 5
+          done
+          echo "the tags haven't reached the GitHub mirror" >&2; exit 1
+      - name: GitHub Release, which publishes npm, PyPI, crates.io and NuGet over there
+        env:
+          GH_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
+          NOTES: ${{ github.event.release.body }}
+        run: gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --notes "$NOTES"
+      - name: Ask the Go proxy for the new version
+        run: curl -sSf "https://proxy.golang.org/github.com/backmeupplz/sendclap-sdk/go/@v/$GITHUB_REF_NAME.info"

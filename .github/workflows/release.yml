@@ -1,0 +1,81 @@
+# npm, PyPI, crates.io and NuGet accept trusted publishing only from GitHub-hosted CI (not Forgejo), so these jobs run
+# here, on the GitHub mirror, when .forgejo/workflows/release.yml on git.borodutch.com publishes the GitHub Release.
+# No tokens: each registry trusts this file by name (backmeupplz/sendclap-sdk, .github/workflows/release.yml).
+# Forgejo ignores this directory because .forgejo/ exists. Each job skips a version that is already published, so a
+# failed job can be re-run alone.
+name: release
+on:
+  release:
+    types: [published]
+permissions:
+  contents: read
+jobs:
+  npm:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing, which also adds provenance
+    defaults: { run: { working-directory: js } }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24 # its npm publishes with trusted publishing
+      - run: npm ci
+      - run: npm view "sendclap@${GITHUB_REF_NAME#v}" version >/dev/null 2>&1 || npm publish --access public
+
+  pypi:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write # PyPI trusted publishing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - run: python -m pip install build && python -m build python
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          packages-dir: python/dist
+          skip-existing: true
+
+  crates:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write # crates.io trusted publishing
+    defaults: { run: { working-directory: rust } }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup update stable
+      - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+        id: auth
+      - run: cargo publish --locked || cargo search sendclap --limit 1 | grep -q "\"${GITHUB_REF_NAME#v}\""
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  nuget:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write # NuGet trusted publishing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet pack dotnet/src/Sendclap -c Release -o out
+      - uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+        id: login
+        with:
+          user: ${{ vars.NUGET_USER }}
+      - run: dotnet nuget push "out/*.nupkg" --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate

@@ -80,17 +80,27 @@ Each folder is a self-contained package with its own tests against a local mock 
 
 Swift's `Package.swift` and PHP's `composer.json` live at the repo root because SwiftPM and Packagist read only the root. CI runs every suite on each push and pull request (`.forgejo/workflows/test.yml`).
 
-## Publishing (not set up yet)
+## Releasing
 
-Every package is at version 0.2.0. Nothing has been published.
+1. `scripts/version.sh bump X.Y.Z`, run every test suite, commit and merge to `main`.
+2. `tea release create --repo backmeupplz/sendclap-sdk --tag vX.Y.Z --title vX.Y.Z --note "what changed"`.
 
-- **npm (`sendclap`)**: trusted publishing from a GitHub Actions workflow on the mirror, the same way plain is published, or an npm token as a Forgejo secret. Run `npm publish --provenance` in `js/`.
-- **PyPI (`sendclap`)**: PyPI trusted publishing (GitHub Actions on the mirror), then `python -m build` and `pypa/gh-action-pypi-publish` in `python/`.
-- **crates.io (`sendclap`)**: crates.io trusted publishing (GitHub Actions on the mirror), then `cargo publish` in `rust/`.
-- **NuGet (`Sendclap`)**: a nuget.org API key as a Forgejo secret, then `dotnet pack -c Release` and `dotnet nuget push`.
-- **Packagist (`sendclap/sendclap`)**: submit the repo URL on packagist.org once and add the Packagist webhook (or GitHub integration) so that tags show up. Packagist takes the version from git tags such as `v0.2.0`. Composer installs fetch the whole repo, which is small.
-- **Swift**: no registry. SwiftPM resolves git tags on the repo, so tag `v0.2.0` (or `0.2.0`).
-- **Go**: no registry. Because the module lives in `go/`, its tags need the prefix `go/v0.2.0`. pkg.go.dev picks them up from the proxy.
-- The repo has to exist publicly as `github.com/backmeupplz/sendclap-sdk` (the Forgejo mirror) before Swift, Go and Packagist can resolve it.
+The release runs [.forgejo/workflows/release.yml](.forgejo/workflows/release.yml), which checks that every package says
+X.Y.Z, tags `go/vX.Y.Z` for the Go module, waits for both tags on the GitHub mirror and creates the GitHub Release.
+That release runs [.github/workflows/release.yml](.github/workflows/release.yml) on GitHub, which publishes:
+
+| Registry | Package | How |
+| --- | --- | --- |
+| npm | `sendclap` | trusted publishing, with provenance |
+| PyPI | `sendclap` | trusted publishing |
+| crates.io | `sendclap` | trusted publishing |
+| NuGet | `Sendclap` | trusted publishing (`NUGET_USER` repository variable on GitHub) |
+| Packagist | `sendclap/sendclap` | follows the mirror's tags |
+| Swift Package Manager | `Sendclap` | the `vX.Y.Z` tag |
+| Go | `github.com/backmeupplz/sendclap-sdk/go` | the `go/vX.Y.Z` tag; the release asks the Go proxy to fetch it |
+
+No registry token is stored anywhere: npm, PyPI, crates.io and NuGet trust `backmeupplz/sendclap-sdk`'s
+`.github/workflows/release.yml` by name. The one-time setup is [scripts/first-publish.sh](scripts/first-publish.sh) plus a
+trusted publisher on each registry's website.
 
 MIT licensed. See [LICENSE](LICENSE).

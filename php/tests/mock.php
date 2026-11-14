@@ -48,6 +48,8 @@ if (str_starts_with($path, '/api/v1/licenses/')) {
     }
 } elseif ($path === '/api/v1/creators/demo') {
     reply(200, ['handle' => 'demo', 'name' => 'Ada Builds']);
+} elseif ($path === '/api/v1/broken') { // before the key check: the test calls it without a key
+    reply(200, 'not json', 'text/plain');
 } elseif (str_starts_with($path, '/api/v1/') && ($headers['authorization'] ?? '') !== 'Bearer sc_test') {
     $fail(401, 'invalid_api_key', 'invalid API key');
 } elseif ($path === '/api/v1/checkouts' && $method === 'POST') {
@@ -67,8 +69,6 @@ if (str_starts_with($path, '/api/v1/licenses/')) {
     reply(200, ['id' => 42, 'item' => 'Pro', 'activity' => []]);
 } elseif ($path === '/api/v1/payments/7') {
     $fail(404, 'not_found', 'payment not found');
-} elseif ($path === '/api/v1/broken') {
-    reply(200, 'not json', 'text/plain');
 } else {
     reply(404, '<html>Not found</html>', 'text/html');
 }

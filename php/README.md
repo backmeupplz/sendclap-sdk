@@ -1,0 +1,72 @@
+# sendclap/sendclap (PHP)
+
+Official PHP client for [Sendclap](https://sendclap.com): check license keys from the app you ship, and call the creator REST API from your server. PHP 8.1+, ext-curl, no other dependencies. API reference: https://sendclap.com/docs
+
+```sh
+composer require sendclap/sendclap
+```
+
+## License check (in your app, no API key)
+
+```php
+use Sendclap\{LicenseClient, NetworkException};
+
+function licensed(string $key, array &$cache): bool {
+    try {
+        $r = (new LicenseClient())->validate($key, $cache['instance'] ?? LicenseClient::instanceName());
+    } catch (NetworkException) { // offline: allow a 7-day grace period since the last good check
+        return time() - ($cache['validated_at'] ?? 0) < 7 * 86400;
+    }
+    if ($r->valid) $cache['validated_at'] = time(); // persist $cache yourself
+    return $r->valid; // status "invalid" or "not_activated": lock the app
+}
+```
+
+On first run, activate the device and remember the instance id:
+
+```php
+use Sendclap\{ActivationLimitException, InvalidLicenseException, LicenseClient};
+try {
+    $cache['instance'] = (new LicenseClient())->activate($key, LicenseClient::instanceName())->instanceId;
+} catch (InvalidLicenseException) { /* unknown key, or refunded / disputed */ }
+catch (ActivationLimitException $e) { echo "Used on {$e->license->activations}/{$e->license->maxActivations} devices"; }
+```
+
+`deactivate($key, $instanceId)` frees the device again. `validate()` never throws for a bad key; it returns `status` `"active"`, `"not_activated"` or `"invalid"`, and throws `NetworkException` only when it could not reach Sendclap, so you can tell "offline" from "invalid".
+
+**Instance name:** `LicenseClient::instanceName()` is the machine's hostname. It is sent to Sendclap and shown to the creator, and two machines with the same hostname share one activation. If that matters, pass your own stable id instead (for example a random UUID saved on first run). The instance id Sendclap returns is the name you send.
+
+## Creator API (server side only)
+
+> **Never ship your `sc_` API key inside an app, website or anything a customer can download.** Anyone holding it can read your payments and customers. Use it only on your own server.
+
+```php
+use Sendclap\ApiClient;
+
+$api = new ApiClient('sc_your_key'); // baseUrl: 'https://sendclap.com', timeout: 15.0
+$checkout = $api->createCheckout(['type' => 'product', 'product_id' => 1, 'email' => 'buyer@example.com']);
+header('Location: ' . $checkout['url']);        // send the buyer here
+$api->getCheckout($checkout['id'])['status'];   // "pending" until "paid"
+foreach ($api->listPayments(['status' => 'paid', 'limit' => 10]) as $p) echo $p['amount'], ' ', $p['email'], "\n";
+```
+
+Methods: `createCheckout`, `getCheckout`, `me`, `listPayments`, `getPayment`, `listMembers`, `listLicenses`, `listDisputes`, `listProducts`, `listMemberships`, `getCreator` (public, works with `new ApiClient()` and no key). They return the API's JSON as associative arrays with snake_case keys.
+
+## Errors
+
+| Exception | When |
+|---|---|
+| `InvalidLicenseException` | 404: the key doesn't exist, or was disabled after a refund or dispute |
+| `ActivationLimitException` | 409: every activation is used; `->license` and `->product` say how many |
+| `NetworkException` | No response: offline, DNS, TLS, timeout (`->status === 0`) |
+| `SendclapException` | Base class; anything else, e.g. 400 bad request, 401 bad API key, 404 not found (`->status`, `getMessage()`) |
+
+## Tests
+
+From the repository root (the Composer package lives there):
+
+```sh
+php php/tests/run.php   # or: composer test
+```
+
+The runner starts `php/tests/mock.php` on PHP's built-in server and needs no Composer install.

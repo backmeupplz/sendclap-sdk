@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sendclap"
+version = "0.1.0"
+description = "Official Sendclap client: license key checks for your app and the creator REST API"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+dependencies = []
+keywords = ["sendclap", "license", "license-key", "payments"]
+classifiers = ["Programming Language :: Python :: 3", "Typing :: Typed"]
+
+[project.urls]
+Homepage = "https://sendclap.com"
+Documentation = "https://sendclap.com/docs"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sendclap"]

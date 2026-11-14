@@ -1,0 +1,30 @@
+{
+  "name": "sendclap",
+  "version": "0.1.0",
+  "description": "Official Sendclap client: license key checks for the apps you ship and the creator REST API.",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/backmeupplz/sendclap-sdk.git", "directory": "js" },
+  "homepage": "https://sendclap.com/docs",
+  "keywords": ["sendclap", "license", "license-key", "payments", "creators"],
+  "type": "module",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "import": { "types": "./dist/esm/index.d.ts", "default": "./dist/esm/index.js" },
+      "require": { "types": "./dist/cjs/index.d.ts", "default": "./dist/cjs/index.js" }
+    }
+  },
+  "files": ["dist"],
+  "sideEffects": false,
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.cjs.json && echo '{\"type\":\"commonjs\"}' > dist/cjs/package.json",
+    "test": "npm run build && node --test test/",
+    "prepublishOnly": "npm test"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}

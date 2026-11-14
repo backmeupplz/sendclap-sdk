@@ -1,0 +1,16 @@
+[package]
+name = "sendclap"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Official Sendclap client: license activation/validation for apps and the creator REST API"
+homepage = "https://sendclap.com/docs"
+repository = "https://github.com/backmeupplz/sendclap-sdk"
+readme = "README.md"
+keywords = ["license", "licensing", "license-key", "payments", "sendclap"]
+categories = ["api-bindings"]
+
+[dependencies]
+ureq = "3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

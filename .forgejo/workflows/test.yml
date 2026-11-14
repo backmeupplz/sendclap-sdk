@@ -1,7 +1,7 @@
 name: test
 # Every SDK's tests in parallel. Our own pushes and PRs run on the Mac runners with their Homebrew toolchains and
-# persistent caches (fast); outsiders' PRs run on Linux with the setup actions. PHP runs in the official php image,
-# since the Macs have no PHP.
+# persistent caches (fast); outsiders' PRs run on Linux with the setup actions. PHP runs on Linux with the distro's
+# php-cli, since the Macs have no PHP.
 on:
   push:
     branches: [main]
@@ -87,8 +87,8 @@ jobs:
 
   php:
     runs-on: ubuntu-latest
-    container: php:8.4-cli
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
+      - run: command -v php || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends php-cli php-curl >/dev/null; }
       - run: php php/tests/run.php

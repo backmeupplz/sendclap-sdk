@@ -6,6 +6,8 @@ public struct LicenseInfo: Codable, Equatable, Sendable {
     public let key: String
     public let activations: Int
     public let maxActivations: Int
+    /// ISO-8601 time a subscription key expires; nil for a key bought outright.
+    public let expiresAt: String?
 }
 
 /// Both fields are nil if the product was deleted.
@@ -26,6 +28,8 @@ public enum LicenseStatus: String, Codable, Sendable {
     case active
     /// The key exists but this instance is not activated on it.
     case notActivated = "not_activated"
+    /// A subscription key that is past `license.expiresAt`.
+    case expired
     /// The key exists but was disabled after a refund or dispute.
     case disabled
     /// The key does not exist.
@@ -35,9 +39,9 @@ public enum LicenseStatus: String, Codable, Sendable {
 public struct ValidateResult: Decodable, Equatable, Sendable {
     public let valid: Bool
     public let status: LicenseStatus
-    /// nil when `status` is `.notFound` or `.disabled`.
+    /// nil when `status` is `.notFound` or `.disabled`; set for `.expired`.
     public let license: LicenseInfo?
-    /// nil when `status` is `.notFound` or `.disabled`.
+    /// nil when `status` is `.notFound` or `.disabled`; set for `.expired`.
     public let product: ProductRef?
 }
 
@@ -188,6 +192,7 @@ public struct IssuedLicense: Codable, Equatable, Sendable {
     public let maxActivations: Int
     public let disabled: Bool
     public let issuedAt: String
+    public let expiresAt: String?
 }
 
 public struct Dispute: Codable, Equatable, Sendable {
@@ -221,6 +226,7 @@ public struct Membership: Codable, Equatable, Sendable {
     public let currency: String
     public let interval: String
     public let x402: String?
+    public let licenseProductId: Int?
 }
 
 public struct CreatorLink: Codable, Equatable, Sendable {

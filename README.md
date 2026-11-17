@@ -26,7 +26,7 @@ The method names below use JavaScript casing. Each SDK follows its own language'
 **`LicenseClient`** needs no key and is safe to ship.
 
 - `activate(licenseKey, instanceName)` returns the instance id (which is the name you passed), the license counts and the product.
-- `validate(licenseKey, instanceId?)` returns `valid` and a `status` of `active`, `not_activated`, `disabled` (refunded or disputed) or `not_found` (unknown key). The server always answers 200 for these, and the SDK only throws when no definite answer arrived, so "this license was refunded" and "unknown key" are different outcomes you can show.
+- `validate(licenseKey, instanceId?)` returns `valid` and a `status` of `active`, `not_activated`, `expired` (a subscription key past `license.expires_at`, which is null for a key bought outright), `disabled` (refunded or disputed) or `not_found` (unknown key). The server always answers 200 for these, and the SDK only throws when no definite answer arrived, so "this license was refunded" and "unknown key" are different outcomes you can show.
 - `deactivate(licenseKey, instanceId)` frees one activation, and fails with `InstanceNotFoundError` if that instance wasn't activated.
 - `instanceName()` returns this machine's hostname, which you can use as the instance name.
 
@@ -48,18 +48,19 @@ Both clients accept a base URL (default `https://sendclap.com`) and a timeout (d
 | --- | --- | --- |
 | `InvalidLicenseError` | `license_not_found` | 404 |
 | `DisabledLicenseError` | `license_disabled` | 403 |
+| `ExpiredLicenseError` (with the license) | `license_expired` | 403 |
 | `InstanceNotFoundError` | `instance_not_found` | 404 |
 | `ActivationLimitError` (with the license counts) | `activation_limit` | 409 |
 | `NetworkError` | `network_error` | 0 (no response) |
 
-The names follow each language's convention (`ErrLicenseDisabled` in Go, `DisabledLicenseException` in C# and PHP, `.licenseDisabled` in Swift, `Error::LicenseDisabled` in Rust). In PHP the property is `errorCode`, because `Exception::$code` is already taken. A reply that isn't a Sendclap error (such as an HTML page from a proxy) has an empty `code`.
+The names follow each language's convention (`ErrLicenseExpired` in Go, `ExpiredLicenseException` in C# and PHP, `.licenseExpired` in Swift, `Error::LicenseExpired` in Rust). In PHP the property is `errorCode`, because `Exception::$code` is already taken. A reply that isn't a Sendclap error (such as an HTML page from a proxy) has an empty `code`.
 
 ## Working offline
 
 Validate at startup or once a day, and store the time of the last successful validation. The SDK's errors let your app tell three situations apart:
 
 - If `validate` returns `valid`, update the stored time and carry on.
-- If it returns `not_found`, `disabled` or `not_activated`, the answer is definite, so lock the app or ask for a key (and say that the license was refunded when it is `disabled`).
+- If it returns `not_found`, `disabled`, `expired` or `not_activated`, the answer is definite, so lock the app or ask for a key (say that the license was refunded when it is `disabled`, and offer a renewal when it is `expired`).
 - If it throws `NetworkError`, the customer is probably offline. Keep working while the last success is within your grace period (for example 7 days), and lock after that.
 
 Each package README shows this pattern in about ten lines.

@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { LicenseClient, ApiClient, SendclapError, InvalidLicenseError, DisabledLicenseError, InstanceNotFoundError, ActivationLimitError, NetworkError, instanceName } from '../dist/esm/index.js'
+import { LicenseClient, ApiClient, SendclapError, InvalidLicenseError, DisabledLicenseError, ExpiredLicenseError, InstanceNotFoundError, ActivationLimitError, NetworkError, instanceName } from '../dist/esm/index.js'
 import * as cjs from '../dist/cjs/index.js'
 
 const license = (activations = 1) => ({ key: 'GOOD', activations, max_activations: 3 })
@@ -26,11 +26,13 @@ const server = createServer(async (req, res) => {
     const action = lic[1], { license_key: key, instance_id: inst } = body
     if (action === 'validate') {
       if (key === 'REFUNDED') return send(200, { valid: false, status: 'disabled' })
+      if (key === 'LAPSED') return send(200, { valid: false, status: 'expired', license: { ...license(), expires_at: '2026-01-01T00:00:00.000Z' }, product })
       if (key !== 'GOOD' && key !== 'FULL') return send(200, { valid: false, status: 'not_found' })
       const ok = !inst || inst === 'dev-1'
       return send(200, { valid: ok, status: ok ? 'active' : 'not_activated', license: license(), product })
     }
     if (key === 'REFUNDED') return fail(403, 'license_disabled', 'this license key is disabled')
+    if (key === 'LAPSED') return fail(403, 'license_expired', 'this license key has expired', { license: { ...license(), expires_at: '2026-01-01T00:00:00.000Z' }, product })
     if (key !== 'GOOD' && key !== 'FULL') return fail(404, 'license_not_found', 'license key not found')
     if (!inst) return fail(400, 'bad_request', 'instance_id is required')
     if (action === 'activate' && key === 'FULL') return fail(409, 'activation_limit', 'activation limit reached', { license: license(3), product })
@@ -67,7 +69,7 @@ test('activate returns the instance and license', async () => {
   const r = await licenses().activate('GOOD', 'dev-1')
   assert.deepEqual(r, { instance_id: 'dev-1', license: license(), product })
   assert.deepEqual(last.body, { license_key: 'GOOD', instance_id: 'dev-1' })
-  assert.equal(last.headers['user-agent'], 'sendclap-js/0.3.0')
+  assert.equal(last.headers['user-agent'], 'sendclap-js/0.4.0')
   assert.equal(last.headers['x-sendclap-client'], undefined)
   assert.equal(last.headers['content-type'], 'application/json')
   assert.equal(last.headers.authorization, undefined)
@@ -78,7 +80,7 @@ test('in a browser the client sends x-sendclap-client instead of User-Agent', as
   try {
     await licenses().validate('GOOD')
   } finally { delete globalThis.document }
-  assert.equal(last.headers['x-sendclap-client'], 'sendclap-js/0.3.0')
+  assert.equal(last.headers['x-sendclap-client'], 'sendclap-js/0.4.0')
   assert.ok(!/sendclap/.test(last.headers['user-agent'] ?? ''))
 })
 
@@ -103,6 +105,14 @@ test('activate on a refunded key is a DisabledLicenseError', async () => {
   assert.ok(e instanceof DisabledLicenseError && !(e instanceof InvalidLicenseError))
   assert.equal(e.status, 403)
   assert.equal(e.code, 'license_disabled')
+})
+
+test('validate and activate on an expired key', async () => {
+  const v = await licenses().validate('LAPSED', 'dev-1')
+  assert.deepEqual([v.valid, v.status, v.license.expires_at, v.product], [false, 'expired', '2026-01-01T00:00:00.000Z', product])
+  const e = await licenses().activate('LAPSED', 'dev-1').catch(e => e)
+  assert.ok(e instanceof ExpiredLicenseError && e instanceof SendclapError)
+  assert.deepEqual([e.status, e.code, e.license.expires_at], [403, 'license_expired', '2026-01-01T00:00:00.000Z'])
 })
 
 test('activate without an instance is a bad_request', async () => {

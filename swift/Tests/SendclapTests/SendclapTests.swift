@@ -44,6 +44,7 @@ final class MockServer: URLProtocol {
     }
 
     static let meta = #""license":{"key":"GOOD","activations":1,"max_activations":3},"product":{"id":1,"name":"Pro"}"#
+    static let lapsed = #""license":{"key":"LAPSED","activations":1,"max_activations":3,"expires_at":"2026-01-01T00:00:00.000Z"},"product":{"id":1,"name":"Pro"}"#
     static let checkout = #"{"id":"0xabc","status":"pending","type":"product","amount":29,"currency":"usd","method":"card","email":"b@example.com","url":"https://sendclap.com/checkout/0xabc","paid_at":null"#
     static func payment(_ id: Int, _ reference: String) -> String {
         "{\"id\":\(id),\"type\":\"product\",\"method\":\"card\",\"status\":\"paid\",\"amount\":29,\"fee\":0.29,\"currency\":\"usd\",\"email\":null,\"message\":null,\"reference\":\"\(reference)\",\"test\":false,\"created_at\":\"2026-11-13T18:04:11.000Z\"}"
@@ -56,11 +57,13 @@ final class MockServer: URLProtocol {
             let b = (try? JSONSerialization.jsonObject(with: body ?? Data())) as? [String: String] ?? [:]
             let key = b["license_key"], instance = b["instance_id"], action = url.lastPathComponent
             if action == "validate" {
+                if key == "LAPSED" { return (200, "{\"valid\":false,\"status\":\"expired\",\(lapsed)}") }
                 if key == "REFUNDED" { return (200, #"{"valid":false,"status":"disabled"}"#) }
                 if key != "GOOD" && key != "FULL" { return (200, #"{"valid":false,"status":"not_found"}"#) }
                 let ok = instance == nil || instance == "dev-1"
                 return (200, "{\"valid\":\(ok),\"status\":\"\(ok ? "active" : "not_activated")\",\(meta)}")
             }
+            if key == "LAPSED" { return (403, "{\"error\":\"this license key has expired\",\"code\":\"license_expired\",\(lapsed)}") }
             if key == "REFUNDED" { return (403, #"{"error":"this license key is disabled","code":"license_disabled"}"#) }
             if key != "GOOD" && key != "FULL" { return (404, #"{"error":"license key not found","code":"license_not_found"}"#) }
             guard let instance = instance else { return (400, #"{"error":"instance_id is required","code":"bad_request"}"#) }
@@ -115,17 +118,17 @@ final class LicenseClientTests: XCTestCase {
     func testActivate() async throws {
         let r = try await client.activate(licenseKey: "GOOD", instanceName: "dev-1")
         XCTAssertEqual(r.instanceId, "dev-1")
-        XCTAssertEqual(r.license, LicenseInfo(key: "GOOD", activations: 1, maxActivations: 3))
+        XCTAssertEqual(r.license, LicenseInfo(key: "GOOD", activations: 1, maxActivations: 3, expiresAt: nil))
         XCTAssertEqual(r.product, ProductRef(id: 1, name: "Pro"))
         XCTAssertEqual(MockServer.last?.url?.absoluteString, "http://mock.test/api/v1/licenses/activate")
         XCTAssertEqual(MockServer.lastBody, #"{"instance_id":"dev-1","license_key":"GOOD"}"#)
-        XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "User-Agent"), "sendclap-swift/0.3.0")
+        XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "User-Agent"), "sendclap-swift/0.4.0")
         XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "Content-Type"), "application/json")
         XCTAssertNil(MockServer.last?.value(forHTTPHeaderField: "Authorization"))
     }
 
     func testActivationLimit() async {
-        let full = LicenseInfo(key: "FULL", activations: 3, maxActivations: 3)
+        let full = LicenseInfo(key: "FULL", activations: 3, maxActivations: 3, expiresAt: nil)
         await assertThrows(.activationLimit("activation limit reached", license: full, product: ProductRef(id: 1, name: "Pro"))) {
             _ = try await self.client.activate(licenseKey: "FULL", instanceName: "dev-9")
         }
@@ -146,6 +149,21 @@ final class LicenseClientTests: XCTestCase {
         let e = SendclapError.licenseDisabled("x")
         XCTAssertEqual(e.status, 403)
         XCTAssertEqual(e.code, "license_disabled")
+    }
+
+    func testExpiredLicense() async throws {
+        let v = try await client.validate(licenseKey: "LAPSED", instanceId: "dev-1")
+        XCTAssertFalse(v.valid)
+        XCTAssertEqual(v.status, .expired)
+        XCTAssertEqual(v.license?.expiresAt, "2026-01-01T00:00:00.000Z")
+        XCTAssertEqual(v.product?.name, "Pro")
+        let lapsed = LicenseInfo(key: "LAPSED", activations: 1, maxActivations: 3, expiresAt: "2026-01-01T00:00:00.000Z")
+        await assertThrows(.licenseExpired("this license key has expired", license: lapsed, product: ProductRef(id: 1, name: "Pro"))) {
+            _ = try await self.client.activate(licenseKey: "LAPSED", instanceName: "dev-1")
+        }
+        let e = SendclapError.licenseExpired("x", license: lapsed, product: ProductRef(id: nil, name: nil))
+        XCTAssertEqual(e.status, 403)
+        XCTAssertEqual(e.code, "license_expired")
     }
 
     func testInstanceNotFound() async {
@@ -207,7 +225,7 @@ final class APIClientTests: XCTestCase {
         let sent = try JSONSerialization.jsonObject(with: Data(MockServer.lastBody!.utf8)) as? NSDictionary
         XCTAssertEqual(sent, ["type": "product", "product_id": 1, "email": "b@example.com"] as NSDictionary)
         XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "Authorization"), "Bearer sc_test")
-        XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "User-Agent"), "sendclap-swift/0.3.0")
+        XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "User-Agent"), "sendclap-swift/0.4.0")
     }
 
     func testGetCheckoutHasURL() async throws {

@@ -24,14 +24,14 @@ _ = try await licenses.activate(licenseKey: key, instanceName: instance) // once
 do {
     let r = try await licenses.validate(licenseKey: key, instanceId: instance)
     if r.valid { UserDefaults.standard.set(Date(), forKey: "licenseCheckedAt") }
-    else { lock(refunded: r.status == .disabled) } // .notFound, .disabled (refunded or disputed) or .notActivated
+    else { lock(refunded: r.status == .disabled) } // .notFound, .disabled (refunded or disputed), .expired (subscription over) or .notActivated
 } catch { // offline: accept the last good check for 7 days
     let last = UserDefaults.standard.object(forKey: "licenseCheckedAt") as? Date ?? .distantPast
     if Date().timeIntervalSince(last) > 7 * 86400 { lock() }
 }
 ```
 
-`validate` returns `.notFound` for an unknown key and `.disabled` for a refunded or disputed one, while `activate` throws `.licenseDisabled` for the latter. `deactivate(licenseKey:instanceId:)` frees the seat, for example from a "Sign out of this Mac" button, and throws `.instanceNotFound` if that instance wasn't activated.
+`validate` returns `.notFound` for an unknown key and `.disabled` for a refunded or disputed one and `.expired` for a subscription key past `license.expiresAt`, while `activate` throws `.licenseDisabled` or `.licenseExpired` for those. `deactivate(licenseKey:instanceId:)` frees the seat, for example from a "Sign out of this Mac" button, and throws `.instanceNotFound` if that instance wasn't activated.
 
 `LicenseClient.instanceName()` returns the host name. It is sent to Sendclap and shown to the creator, and two machines with the same host name share one activation. On iOS the host name is not useful: pass `UIDevice.current.identifierForVendor?.uuidString`, or a UUID you save on first launch. The instance id Sendclap returns is the name you pass (up to 200 characters).
 
@@ -64,6 +64,7 @@ Everything throws `SendclapError`, with `.status`, `.code` (the server's machine
 | --- | --- | --- |
 | `.invalidLicense` | `license_not_found` | 404: the key does not exist |
 | `.licenseDisabled` | `license_disabled` | 403: disabled after a refund or dispute |
+| `.licenseExpired(_, license:, product:)` | `license_expired` | 403: subscription over (`license.expiresAt`) |
 | `.instanceNotFound` | `instance_not_found` | 404: `deactivate` for an instance that isn't activated |
 | `.activationLimit(_, license:, product:)` | `activation_limit` | 409: the key is activated on all the devices it allows |
 | `.network` | `network_error` | no response: offline, DNS, TLS or timeout (status 0) |

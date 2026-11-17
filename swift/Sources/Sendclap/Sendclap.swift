@@ -3,7 +3,7 @@ import Foundation
 import FoundationNetworking
 #endif
 
-public let sendclapVersion = "0.3.0"
+public let sendclapVersion = "0.4.0"
 
 /// Every error the SDK throws.
 public enum SendclapError: Error, LocalizedError, Equatable {
@@ -11,6 +11,8 @@ public enum SendclapError: Error, LocalizedError, Equatable {
     case invalidLicense(String)
     /// `license_disabled` (403): the key was disabled after a refund or dispute.
     case licenseDisabled(String)
+    /// `license_expired` (403): the subscription key has expired; `license.expiresAt` says when.
+    case licenseExpired(String, license: LicenseInfo, product: ProductRef)
     /// `instance_not_found` (404): deactivate for an instance that isn't activated.
     case instanceNotFound(String)
     /// `activation_limit` (409): the key is already activated on as many instances as it allows.
@@ -25,7 +27,7 @@ public enum SendclapError: Error, LocalizedError, Equatable {
     public var status: Int {
         switch self {
         case .invalidLicense, .instanceNotFound: return 404
-        case .licenseDisabled: return 403
+        case .licenseDisabled, .licenseExpired: return 403
         case .activationLimit: return 409
         case .api(let status, _, _): return status
         case .network: return 0
@@ -37,6 +39,7 @@ public enum SendclapError: Error, LocalizedError, Equatable {
         switch self {
         case .invalidLicense: return "license_not_found"
         case .licenseDisabled: return "license_disabled"
+        case .licenseExpired: return "license_expired"
         case .instanceNotFound: return "instance_not_found"
         case .activationLimit: return "activation_limit"
         case .api(_, let code, _): return code
@@ -46,7 +49,7 @@ public enum SendclapError: Error, LocalizedError, Equatable {
 
     public var message: String {
         switch self {
-        case .invalidLicense(let m), .licenseDisabled(let m), .instanceNotFound(let m), .activationLimit(let m, _, _), .api(_, _, let m), .network(let m): return m
+        case .invalidLicense(let m), .licenseDisabled(let m), .licenseExpired(let m, _, _), .instanceNotFound(let m), .activationLimit(let m, _, _), .api(_, _, let m), .network(let m): return m
         }
     }
 
@@ -117,6 +120,10 @@ struct Transport {
             switch code {
             case "license_not_found": throw SendclapError.invalidLicense(message)
             case "license_disabled": throw SendclapError.licenseDisabled(message)
+            case "license_expired":
+                if let r = try? Transport.decoder.decode(DeactivateResult.self, from: data) {
+                    throw SendclapError.licenseExpired(message, license: r.license, product: r.product)
+                }
             case "instance_not_found": throw SendclapError.instanceNotFound(message)
             case "activation_limit":
                 if let r = try? Transport.decoder.decode(DeactivateResult.self, from: data) {
@@ -176,13 +183,13 @@ public final class LicenseClient {
     public static func instanceName() -> String { ProcessInfo.processInfo.hostName }
 
     /// Registers this instance against the key. Activating the same instance again counts once.
-    /// Throws `.invalidLicense`, `.licenseDisabled`, `.activationLimit`, `.api` or `.network`.
+    /// Throws `.invalidLicense`, `.licenseDisabled`, `.licenseExpired`, `.activationLimit`, `.api` or `.network`.
     public func activate(licenseKey: String, instanceName: String) async throws -> ActivateResult {
         try await t.send("POST", "/licenses/activate", body: body(licenseKey, instanceName))
     }
 
-    /// Checks the key, and with `instanceId` that this instance is activated. An unknown or disabled key returns
-    /// status `.notFound` or `.disabled` instead of throwing, so a thrown error means "could not check" (offline: use your grace period).
+    /// Checks the key, and with `instanceId` that this instance is activated. An unknown, disabled or expired key returns
+    /// status `.notFound`, `.disabled` or `.expired` instead of throwing, so a thrown error means "could not check" (offline: use your grace period).
     public func validate(licenseKey: String, instanceId: String? = nil) async throws -> ValidateResult {
         try await t.send("POST", "/licenses/validate", body: body(licenseKey, instanceId))
     }

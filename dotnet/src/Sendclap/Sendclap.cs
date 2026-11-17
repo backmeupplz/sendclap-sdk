@@ -40,6 +40,18 @@ namespace Sendclap
         public DisabledLicenseException(string message) : base(403, "license_disabled", message) { }
     }
 
+    /// <summary>The subscription license key has expired (<c>license_expired</c>); <see cref="LicenseInfo.ExpiresAt"/> says when.</summary>
+    public sealed class ExpiredLicenseException : SendclapException
+    {
+        public LicenseInfo License { get; }
+        public ProductRef Product { get; }
+        public ExpiredLicenseException(string message, LicenseInfo license, ProductRef product) : base(403, "license_expired", message)
+        {
+            License = license;
+            Product = product;
+        }
+    }
+
     /// <summary>Deactivate was called for an instance that isn't activated (<c>instance_not_found</c>).</summary>
     public sealed class InstanceNotFoundException : SendclapException
     {
@@ -66,7 +78,7 @@ namespace Sendclap
 
     internal sealed class Transport
     {
-        internal const string Version = "0.3.0";
+        internal const string Version = "0.4.0";
         internal const string DefaultBaseUrl = "https://sendclap.com";
         // One shared client avoids socket exhaustion; the timeout is applied per request instead.
         static readonly HttpClient Shared = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
@@ -145,6 +157,9 @@ namespace Sendclap
             {
                 case "license_not_found": return new InvalidLicenseException(message);
                 case "license_disabled": return new DisabledLicenseException(message);
+                case "license_expired":
+                    var x = obj.Deserialize<DeactivateResult>(Json)!;
+                    return new ExpiredLicenseException(message, x.License, x.Product);
                 case "instance_not_found": return new InstanceNotFoundException(message);
                 case "activation_limit":
                     var r = obj.Deserialize<DeactivateResult>(Json)!;
@@ -182,14 +197,15 @@ namespace Sendclap
         /// <summary>Registers this instance against the key. Activating the same instance again counts once.</summary>
         /// <exception cref="InvalidLicenseException"/>
         /// <exception cref="DisabledLicenseException"/>
+        /// <exception cref="ExpiredLicenseException"/>
         /// <exception cref="ActivationLimitException"/>
         /// <exception cref="SendclapNetworkException"/>
         public Task<ActivateResult> ActivateAsync(string licenseKey, string instanceName, CancellationToken ct = default) =>
             t.SendAsync<ActivateResult>(HttpMethod.Post, "/licenses/activate", Body(licenseKey, instanceName), ct);
 
         /// <summary>
-        /// Checks the key, and with <paramref name="instanceId"/> that this instance is activated. An unknown or disabled key
-        /// returns <see cref="LicenseStatus.NotFound"/> or <see cref="LicenseStatus.Disabled"/> instead of throwing, so an exception means "could not check" (offline).
+        /// Checks the key, and with <paramref name="instanceId"/> that this instance is activated. An unknown, disabled or expired key
+        /// returns <see cref="LicenseStatus.NotFound"/>, <see cref="LicenseStatus.Disabled"/> or <see cref="LicenseStatus.Expired"/> instead of throwing, so an exception means "could not check" (offline).
         /// </summary>
         /// <exception cref="SendclapNetworkException"/>
         public Task<ValidateResult> ValidateAsync(string licenseKey, string? instanceId = null, CancellationToken ct = default) =>

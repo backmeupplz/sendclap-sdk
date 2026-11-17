@@ -7,7 +7,7 @@ namespace Sendclap;
 /** @internal Shared transport for LicenseClient and ApiClient. */
 final class Http
 {
-    public const VERSION = '0.3.0';
+    public const VERSION = '0.4.0';
     public const DEFAULT_BASE_URL = 'https://sendclap.com';
 
     private string $base;
@@ -66,6 +66,7 @@ final class Http
         throw match ($code) {
             'license_not_found' => new InvalidLicenseException($status, $message),
             'license_disabled' => new DisabledLicenseException($status, $message),
+            'license_expired' => new ExpiredLicenseException($status, $message, LicenseInfo::from($d), ProductRef::from($d)),
             'instance_not_found' => new InstanceNotFoundException($status, $message),
             'activation_limit' => new ActivationLimitException($status, $message, LicenseInfo::from($d), ProductRef::from($d)),
             default => new SendclapException($status, $message, $code),

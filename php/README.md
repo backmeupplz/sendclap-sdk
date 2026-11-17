@@ -18,7 +18,7 @@ function licensed(string $key, array &$cache): bool {
         return time() - ($cache['validated_at'] ?? 0) < 7 * 86400;
     }
     if ($r->valid) $cache['validated_at'] = time(); // persist $cache yourself
-    return $r->valid; // status "not_found", "disabled" (refunded or disputed) or "not_activated": lock the app
+    return $r->valid; // status "not_found", "disabled" (refunded or disputed), "expired" (subscription over) or "not_activated": lock the app
 }
 ```
 
@@ -33,7 +33,7 @@ catch (DisabledLicenseException) { /* the payment was refunded or disputed */ }
 catch (ActivationLimitException $e) { echo "Used on {$e->license->activations}/{$e->license->maxActivations} devices"; }
 ```
 
-`deactivate($key, $instanceId)` frees the device again, and throws `InstanceNotFoundException` if it wasn't activated. `validate()` never throws for a bad key; it returns `status` `"active"`, `"not_activated"`, `"disabled"` (refunded or disputed) or `"not_found"` (unknown key), and throws `NetworkException` only when it could not reach Sendclap, so you can tell "offline" from "not found".
+`deactivate($key, $instanceId)` frees the device again, and throws `InstanceNotFoundException` if it wasn't activated. `validate()` never throws for a bad key; it returns `status` `"active"`, `"not_activated"`, `"expired"` (subscription over, see `license->expiresAt`), `"disabled"` (refunded or disputed) or `"not_found"` (unknown key), and throws `NetworkException` only when it could not reach Sendclap, so you can tell "offline" from "not found".
 
 **Instance name:** `LicenseClient::instanceName()` is the machine's hostname. It is sent to Sendclap and shown to the creator, and two machines with the same hostname share one activation. If that matters, pass your own stable id instead (for example a random UUID saved on first run). The instance id Sendclap returns is the name you send.
 
@@ -65,6 +65,7 @@ Every exception is a `SendclapException` with `->status`, `->errorCode` (the ser
 |---|---|---|
 | `InvalidLicenseException` | `license_not_found` | 404: the key doesn't exist |
 | `DisabledLicenseException` | `license_disabled` | 403: disabled after a refund or dispute |
+| `ExpiredLicenseException` | `license_expired` | 403: subscription over; `->license->expiresAt` says when |
 | `InstanceNotFoundException` | `instance_not_found` | 404: `deactivate` for an instance that isn't activated |
 | `ActivationLimitException` | `activation_limit` | 409: every activation is used; `->license` and `->product` say how many |
 | `NetworkException` | `network_error` | No response: offline, DNS, TLS, timeout (`->status === 0`) |

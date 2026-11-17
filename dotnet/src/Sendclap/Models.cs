@@ -12,6 +12,8 @@ namespace Sendclap
         public string Key { get; init; } = "";
         public int Activations { get; init; }
         public int MaxActivations { get; init; }
+        /// <summary>When a subscription key expires; null for a key bought outright.</summary>
+        public DateTimeOffset? ExpiresAt { get; init; }
     }
 
     /// <summary>The product a license key belongs to. Both fields are null if the product was deleted.</summary>
@@ -39,15 +41,17 @@ namespace Sendclap
         Disabled,
         /// <summary>The key does not exist.</summary>
         NotFound,
+        /// <summary>A subscription key that is past <see cref="LicenseInfo.ExpiresAt"/>. Last, so the older values keep their numbers.</summary>
+        Expired,
     }
 
     public sealed record ValidateResult
     {
         public bool Valid { get; init; }
         public LicenseStatus Status { get; init; }
-        /// <summary>Null when <see cref="Status"/> is <see cref="LicenseStatus.NotFound"/> or <see cref="LicenseStatus.Disabled"/>.</summary>
+        /// <summary>Null when <see cref="Status"/> is <see cref="LicenseStatus.NotFound"/> or <see cref="LicenseStatus.Disabled"/>; set for <see cref="LicenseStatus.Expired"/>.</summary>
         public LicenseInfo? License { get; init; }
-        /// <summary>Null when <see cref="Status"/> is <see cref="LicenseStatus.NotFound"/> or <see cref="LicenseStatus.Disabled"/>.</summary>
+        /// <summary>Null when <see cref="Status"/> is <see cref="LicenseStatus.NotFound"/> or <see cref="LicenseStatus.Disabled"/>; set for <see cref="LicenseStatus.Expired"/>.</summary>
         public ProductRef? Product { get; init; }
     }
 
@@ -189,6 +193,7 @@ namespace Sendclap
         public int MaxActivations { get; init; }
         public bool Disabled { get; init; }
         public DateTimeOffset IssuedAt { get; init; }
+        public DateTimeOffset? ExpiresAt { get; init; }
     }
 
     public sealed record Dispute
@@ -225,6 +230,7 @@ namespace Sendclap
         public string Currency { get; init; } = "";
         public string Interval { get; init; } = "";
         public string? X402 { get; init; }
+        public long? LicenseProductId { get; init; }
     }
 
     public sealed record CreatorLink

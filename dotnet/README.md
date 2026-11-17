@@ -22,14 +22,14 @@ await licenses.ActivateAsync(key, instance); // once, when the key is entered
 try {
     var r = await licenses.ValidateAsync(key, instance);
     if (r.Valid) settings.LicenseCheckedAt = DateTime.UtcNow;
-    else if (r.Status == LicenseStatus.Disabled) Lock("This license was refunded."); // NotFound, Disabled or NotActivated
+    else if (r.Status == LicenseStatus.Disabled) Lock("This license was refunded."); // NotFound, Disabled, Expired or NotActivated
     else Lock("Invalid license.");
 } catch (SendclapNetworkException) { // offline: accept the last good check for 7 days
     if (DateTime.UtcNow - settings.LicenseCheckedAt > TimeSpan.FromDays(7)) Lock("Could not verify the license.");
 }
 ```
 
-`ValidateAsync` returns `NotFound` for an unknown key and `Disabled` for a refunded or disputed one, and `ActivateAsync` throws `DisabledLicenseException` for the latter. `DeactivateAsync(key, instance)` frees the seat, for example from a "Sign out of this computer" button, and throws `InstanceNotFoundException` if that instance wasn't activated.
+`ValidateAsync` returns `NotFound` for an unknown key and `Disabled` for a refunded or disputed one and `Expired` for a subscription key past `License.ExpiresAt`, and `ActivateAsync` throws `DisabledLicenseException` or `ExpiredLicenseException` for those. `DeactivateAsync(key, instance)` frees the seat, for example from a "Sign out of this computer" button, and throws `InstanceNotFoundException` if that instance wasn't activated.
 
 `LicenseClient.InstanceName()` returns `Environment.MachineName`. It is sent to Sendclap and shown to the creator, and two machines with the same name share one activation, so pass your own stable id (such as a `Guid` saved on first run) if that matters. The instance id Sendclap returns is the name you pass (up to 200 characters).
 
@@ -61,6 +61,7 @@ All exceptions derive from `SendclapException`, which has `Status`, `Code` (the 
 | --- | --- | --- |
 | `InvalidLicenseException` | `license_not_found` | 404: the key does not exist |
 | `DisabledLicenseException` | `license_disabled` | 403: disabled after a refund or dispute |
+| `ExpiredLicenseException` | `license_expired` | 403: subscription over (`License.ExpiresAt`, `Product`) |
 | `InstanceNotFoundException` | `instance_not_found` | 404: `DeactivateAsync` for an instance that isn't activated |
 | `ActivationLimitException` | `activation_limit` | 409: the key is activated on all the devices it allows (`License`, `Product`) |
 | `SendclapNetworkException` | `network_error` | no response: offline, DNS, TLS or timeout (`Status` 0) |

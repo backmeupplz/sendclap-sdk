@@ -14,7 +14,7 @@ The license endpoints need no API key, so this code is safe to ship inside your 
 lc := sendclap.NewLicenseClient()
 name, _ := sendclap.InstanceName()
 if _, err := lc.Activate(ctx, key, name); err != nil && !errors.Is(err, sendclap.ErrNetwork) {
-	return err // ErrInvalidLicense, ErrLicenseDisabled, *ActivationLimitError, ...
+	return err // ErrInvalidLicense, ErrLicenseDisabled, ErrLicenseExpired, *ActivationLimitError, ...
 }
 v, err := lc.Validate(ctx, key, name)
 switch {
@@ -24,7 +24,7 @@ default: unlocked = v.Valid; if v.Valid { lastValidated = time.Now() } // save l
 }
 ```
 
-`Validate` never fails for a bad key: an unknown key comes back as `Status == StatusNotFound`, a refunded or disputed one as `StatusDisabled` (so you can say "this license was refunded"), an inactive device as `StatusNotActivated`. `Activate` returns `ErrLicenseDisabled` for a refunded key, and `Deactivate` returns `ErrInstanceNotFound` for an instance that isn't activated. An error means the answer is unknown (offline, server down), so cache the time of the last successful validation and keep the app unlocked for a grace period. Activate once on first run and store the instance name; `Deactivate(ctx, key, name)` frees the seat when the user moves to another machine.
+`Validate` never fails for a bad key: an unknown key comes back as `Status == StatusNotFound`, a refunded or disputed one as `StatusDisabled` (so you can say "this license was refunded"), a subscription key past `License.ExpiresAt` as `StatusExpired`, an inactive device as `StatusNotActivated`. `Activate` returns `ErrLicenseDisabled` for a refunded key, and `Deactivate` returns `ErrInstanceNotFound` for an instance that isn't activated. An error means the answer is unknown (offline, server down), so cache the time of the last successful validation and keep the app unlocked for a grace period. Activate once on first run and store the instance name; `Deactivate(ctx, key, name)` frees the seat when the user moves to another machine.
 
 `InstanceName()` returns the machine hostname. It is sent to Sendclap and shown to the creator, and two machines with the same hostname share one activation; pass your own stable id (for example a random UUID saved on first run) if that matters. The instance id Sendclap returns is the name you pass.
 
@@ -61,6 +61,7 @@ Every error is a `*sendclap.Error` (`errors.As`) with `Status`, `Code` (the serv
 |---|---|---|
 | `errors.Is(err, sendclap.ErrInvalidLicense)` | `license_not_found` | 404: key unknown |
 | `errors.Is(err, sendclap.ErrLicenseDisabled)` | `license_disabled` | 403: disabled after a refund or dispute |
+| `errors.Is(err, sendclap.ErrLicenseExpired)` / `*sendclap.ExpiredLicenseError` | `license_expired` | 403: subscription over; carries `License` (with `ExpiresAt`) and `Product` |
 | `errors.Is(err, sendclap.ErrInstanceNotFound)` | `instance_not_found` | 404: `Deactivate` for an instance that isn't activated |
 | `errors.Is(err, sendclap.ErrActivationLimit)` / `*sendclap.ActivationLimitError` | `activation_limit` | 409: all activations in use; carries `License` and `Product` |
 | `errors.Is(err, sendclap.ErrNetwork)` | `network_error` | no response (DNS, refused, TLS, timeout); `Status` is 0 |

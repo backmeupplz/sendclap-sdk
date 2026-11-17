@@ -15,7 +15,7 @@ use sendclap::{Error, LicenseClient, ValidationStatus};
 
 let lc = LicenseClient::new();
 let name = sendclap::instance_name().unwrap_or_else(|| "my-app".into());
-lc.activate(&key, &name)?; // once, on first run; Error::InvalidLicense / LicenseDisabled / ActivationLimit
+lc.activate(&key, &name)?; // once, on first run; Error::InvalidLicense / LicenseDisabled / LicenseExpired / ActivationLimit
 let unlocked = match lc.validate(&key, Some(&name)) {
     Ok(v) => { if v.valid { save_last_validated(now()) } v.status == ValidationStatus::Active }
     Err(Error::Network(_)) => now() - last_validated() < 7 * 24 * 3600, // offline grace
@@ -23,7 +23,7 @@ let unlocked = match lc.validate(&key, Some(&name)) {
 };
 ```
 
-`validate` never fails for a bad key: an unknown key comes back as `ValidationStatus::NotFound`, a refunded or disputed one as `Disabled` (so you can say "this license was refunded"), an inactive device as `NotActivated`. `activate` returns `Error::LicenseDisabled` for a refunded key, and `deactivate` returns `Error::InstanceNotFound` for an instance that isn't activated. An `Err` means the answer is unknown (offline, server down), so cache the time of the last successful validation and keep the app unlocked for a grace period. `ValidateResult` is `Serialize`, so you can store it as is. `deactivate(&key, &name)` frees the seat when the user moves to another machine.
+`validate` never fails for a bad key: an unknown key comes back as `ValidationStatus::NotFound`, a refunded or disputed one as `Disabled` (so you can say "this license was refunded"), a subscription key past `expires_at` as `Expired`, an inactive device as `NotActivated`. `activate` returns `Error::LicenseDisabled` for a refunded key, and `deactivate` returns `Error::InstanceNotFound` for an instance that isn't activated. An `Err` means the answer is unknown (offline, server down), so cache the time of the last successful validation and keep the app unlocked for a grace period. `ValidateResult` is `Serialize`, so you can store it as is. `deactivate(&key, &name)` frees the seat when the user moves to another machine.
 
 `instance_name()` returns the machine hostname (`COMPUTERNAME`/`HOSTNAME`, else the `hostname` command). It is sent to Sendclap and shown to the creator, and two machines with the same hostname share one activation; pass your own stable id (for example a random UUID saved on first run) if that matters. The instance id Sendclap returns is the name you pass.
 
@@ -57,6 +57,7 @@ Methods: `create_checkout` and `get_checkout` (both return the checkout `url`), 
 |---|---|---|
 | `InvalidLicense { message }` | `license_not_found` | 404: key unknown |
 | `LicenseDisabled { message }` | `license_disabled` | 403: disabled after a refund or dispute |
+| `LicenseExpired { message, license, product }` | `license_expired` | 403: subscription over; `license.expires_at` says when |
 | `InstanceNotFound { message }` | `instance_not_found` | 404: `deactivate` for an instance that isn't activated |
 | `ActivationLimit { message, license, product }` | `activation_limit` | 409: all activations in use |
 | `Network(String)` | `network_error` | no response (DNS, refused, TLS, timeout) |

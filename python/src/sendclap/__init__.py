@@ -9,13 +9,13 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Generic, Iterator, List, Optional, TypedDict, TypeVar
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 DEFAULT_BASE_URL = "https://sendclap.com"
 USER_AGENT = f"sendclap-python/{__version__}"
 
 __all__ = [
     "LicenseClient", "ApiClient", "instance_name",
-    "SendclapError", "InvalidLicenseError", "DisabledLicenseError", "InstanceNotFoundError",
+    "SendclapError", "InvalidLicenseError", "DisabledLicenseError", "ExpiredLicenseError", "InstanceNotFoundError",
     "ActivationLimitError", "NetworkError",
     "ActivateResult", "ValidateResult", "DeactivateResult", "LicenseInfo", "ProductRef",
     "Page", "Checkout", "Totals", "Stats", "Payment", "PaymentDetail", "Member", "IssuedLicense",
@@ -48,6 +48,15 @@ class DisabledLicenseError(SendclapError):
     """The key exists but was disabled after a refund or dispute (license_disabled)."""
 
 
+class ExpiredLicenseError(SendclapError):
+    """The subscription license key has expired (license_expired); license.expires_at says when."""
+
+    def __init__(self, status: int, message: str, license: LicenseInfo, product: ProductRef) -> None:
+        super().__init__(status, message, "license_expired")
+        self.license = license
+        self.product = product
+
+
 class InstanceNotFoundError(SendclapError):
     """Deactivate was called for an instance that isn't activated (instance_not_found)."""
 
@@ -75,6 +84,7 @@ class LicenseInfo:
     key: str
     activations: int
     max_activations: int
+    expires_at: Optional[str] = None  # ISO 8601 time a subscription key expires, None if bought outright
 
 
 @dataclass(frozen=True)
@@ -93,7 +103,7 @@ class ActivateResult:
 @dataclass(frozen=True)
 class ValidateResult:
     valid: bool
-    status: str  # "active", "not_activated", "disabled" (refunded or disputed) or "not_found" (unknown key)
+    status: str  # "active", "not_activated", "expired" (subscription over), "disabled" (refunded or disputed) or "not_found" (unknown key)
     license: Optional[LicenseInfo] = None
     product: Optional[ProductRef] = None
 
@@ -189,6 +199,7 @@ class IssuedLicense(TypedDict):
     max_activations: int
     disabled: bool
     issued_at: str
+    expires_at: Optional[str]
 
 
 class Dispute(TypedDict):
@@ -212,6 +223,7 @@ class Product(TypedDict):
     issues_license_key: bool
     page: str
     x402: Optional[str]
+    license_product_id: Optional[int]
 
 
 class Membership(TypedDict):
@@ -282,6 +294,8 @@ class _Http:
             raise InvalidLicenseError(status, msg, code)
         if code == "license_disabled":
             raise DisabledLicenseError(status, msg, code)
+        if code == "license_expired":
+            raise ExpiredLicenseError(status, msg, _license(d), _product(d))
         if code == "instance_not_found":
             raise InstanceNotFoundError(status, msg, code)
         if code == "activation_limit":
@@ -292,7 +306,7 @@ class _Http:
 def _license(d: Dict[str, Any]) -> LicenseInfo:
     lic = d.get("license") or {}
     return LicenseInfo(key=lic.get("key", ""), activations=lic.get("activations", 0),
-                       max_activations=lic.get("max_activations", 0))
+                       max_activations=lic.get("max_activations", 0), expires_at=lic.get("expires_at"))
 
 
 def _product(d: Dict[str, Any]) -> ProductRef:
@@ -326,7 +340,7 @@ class LicenseClient:
         return ActivateResult(instance_id=d["instance_id"], license=_license(d), product=_product(d))
 
     def validate(self, license_key: str, instance_id: Optional[str] = None) -> ValidateResult:
-        """Never raises for a bad key: returns status "not_found" or "disabled". Raises NetworkError when offline."""
+        """Never raises for a bad key: returns status "not_found", "disabled" or "expired". Raises NetworkError when offline."""
         d = self._post("validate", license_key, instance_id)
         known = "license" in d
         return ValidateResult(valid=d.get("valid") is True, status=d["status"],

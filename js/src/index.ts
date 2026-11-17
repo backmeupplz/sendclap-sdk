@@ -1,7 +1,7 @@
 // Sendclap client for JavaScript and TypeScript: license checks for the apps you ship, and the creator REST API for your server.
 // Zero dependencies; uses the global fetch (Node 18+, Bun, Deno, browsers, Electron).
 
-export const VERSION = '0.3.0'
+export const VERSION = '0.4.0'
 const DEFAULT_BASE_URL = 'https://sendclap.com'
 const DEFAULT_TIMEOUT_MS = 15_000
 
@@ -38,6 +38,13 @@ export class DisabledLicenseError extends SendclapError {
     this.name = 'DisabledLicenseError'
   }
 }
+/** The subscription license key has expired (`license_expired`); `license.expires_at` says when. */
+export class ExpiredLicenseError extends SendclapError {
+  constructor(message: string, readonly license: LicenseInfo, readonly product: ProductRef, body?: unknown) {
+    super(message, 403, 'license_expired', body)
+    this.name = 'ExpiredLicenseError'
+  }
+}
 /** Every activation of the key is in use; deactivate another instance first (`activation_limit`). */
 export class ActivationLimitError extends SendclapError {
   constructor(message: string, readonly license: LicenseInfo, readonly product: ProductRef, body?: unknown) {
@@ -62,15 +69,18 @@ export class NetworkError extends SendclapError {
 
 // ---------- license types ----------
 
-export interface LicenseInfo { key: string; activations: number; max_activations: number }
+export interface LicenseInfo { key: string; activations: number; max_activations: number
+  /** ISO 8601 time a subscription key expires, or null for a key bought outright. */
+  expires_at: string | null
+}
 export interface ProductRef { id?: number; name?: string }
 export interface ActivateResult { instance_id: string; license: LicenseInfo; product: ProductRef }
 export interface DeactivateResult { license: LicenseInfo; product: ProductRef }
 export interface ValidateResult {
   valid: boolean
-  /** `active`: valid. `not_activated`: the key exists but this instance isn't activated. `not_found`: unknown key. `disabled`: refunded or disputed. */
-  status: 'active' | 'not_activated' | 'disabled' | 'not_found'
-  /** Present for `active` and `not_activated` only. */
+  /** `active`: valid. `not_activated`: the key exists but this instance isn't activated. `not_found`: unknown key. `expired`: a subscription key past `license.expires_at`. `disabled`: refunded or disputed. */
+  status: 'active' | 'not_activated' | 'expired' | 'disabled' | 'not_found'
+  /** Present for `active`, `not_activated` and `expired`. */
   license?: LicenseInfo
   product?: ProductRef
 }
@@ -130,7 +140,7 @@ export interface Member {
   current_period_ends: string; joined_at: string
 }
 export interface IssuedLicense {
-  key: string; product: string; email: string; activations: number; max_activations: number; disabled: boolean; issued_at: string
+  key: string; product: string; email: string; activations: number; max_activations: number; disabled: boolean; issued_at: string; expires_at: string | null
 }
 export interface Dispute {
   id: string; payment_id: number; email: string | null; amount: number; reason: string | null; status: string
@@ -140,7 +150,7 @@ export interface Product {
   id: number; name: string; description: string; price: number; currency: string
   delivers_file: boolean; issues_license_key: boolean; page: string; x402: string | null
 }
-export interface Membership { id: number; name: string; description: string; price: number; currency: string; interval: string; x402: string | null }
+export interface Membership { id: number; name: string; description: string; price: number; currency: string; interval: string; x402: string | null; license_product_id: number | null }
 export interface Creator {
   handle: string; name: string; bio: string; url: string; avatar: string | null
   links: { label: string; url: string }[]
@@ -180,6 +190,7 @@ async function request<T>(o: ClientOptions, method: 'GET' | 'POST', path: string
   const code = typeof data?.code === 'string' ? data.code : ''
   if (code === 'license_not_found') throw new InvalidLicenseError(message, data)
   if (code === 'license_disabled') throw new DisabledLicenseError(message, data)
+  if (code === 'license_expired') throw new ExpiredLicenseError(message, data.license, data.product, data)
   if (code === 'instance_not_found') throw new InstanceNotFoundError(message, data)
   if (code === 'activation_limit') throw new ActivationLimitError(message, data.license, data.product, data)
   throw new SendclapError(message, res.status, code, data ?? text)
@@ -195,7 +206,7 @@ export class LicenseClient {
     return request<T>(this.options, 'POST', `/licenses/${action}`, { body: { license_key: licenseKey, ...(instanceId ? { instance_id: instanceId } : {}) } })
   }
 
-  /** Registers this device against the key. Throws InvalidLicenseError, DisabledLicenseError or ActivationLimitError. Activating the same instance twice counts once. The returned instance_id is the name you passed. */
+  /** Registers this device against the key. Throws InvalidLicenseError, DisabledLicenseError, ExpiredLicenseError or ActivationLimitError. Activating the same instance twice counts once. The returned instance_id is the name you passed. */
   async activate(licenseKey: string, instanceName: string): Promise<ActivateResult> {
     const { instance_id, license, product } = await this.call<ActivateResult>('activate', licenseKey, instanceName)
     return { instance_id, license, product }

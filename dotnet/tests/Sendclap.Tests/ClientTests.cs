@@ -14,6 +14,7 @@ sealed class MockServer : HttpMessageHandler
     public TimeSpan Delay = TimeSpan.Zero;
 
     const string Meta = "\"license\":{\"key\":\"GOOD\",\"activations\":1,\"max_activations\":3},\"product\":{\"id\":1,\"name\":\"Pro\"}";
+    const string Lapsed = "\"license\":{\"key\":\"LAPSED\",\"activations\":1,\"max_activations\":3,\"expires_at\":\"2026-01-01T00:00:00.000Z\"},\"product\":{\"id\":1,\"name\":\"Pro\"}";
     const string CheckoutJson = "{\"id\":\"0xabc\",\"status\":\"pending\",\"type\":\"product\",\"amount\":29,\"currency\":\"usd\",\"method\":\"card\",\"email\":\"b@example.com\",\"url\":\"https://sendclap.com/checkout/0xabc\",\"paid_at\":null";
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage req, CancellationToken ct)
@@ -42,11 +43,13 @@ sealed class MockServer : HttpMessageHandler
             var action = path.Substring("/api/v1/licenses/".Length);
             if (action == "validate")
             {
+                if (key == "LAPSED") return (200, $"{{\"valid\":false,\"status\":\"expired\",{Lapsed}}}");
                 if (key == "REFUNDED") return (200, "{\"valid\":false,\"status\":\"disabled\"}");
                 if (key != "GOOD" && key != "FULL") return (200, "{\"valid\":false,\"status\":\"not_found\"}");
                 var ok = instance == null || instance == "dev-1";
                 return (200, $"{{\"valid\":{(ok ? "true" : "false")},\"status\":\"{(ok ? "active" : "not_activated")}\",{Meta}}}");
             }
+            if (key == "LAPSED") return (403, $"{{\"error\":\"this license key has expired\",\"code\":\"license_expired\",{Lapsed}}}");
             if (key == "REFUNDED") return (403, "{\"error\":\"this license key is disabled\",\"code\":\"license_disabled\"}");
             if (key != "GOOD" && key != "FULL") return (404, "{\"error\":\"license key not found\",\"code\":\"license_not_found\"}");
             if (instance == null) return (400, "{\"error\":\"instance_id is required\",\"code\":\"bad_request\"}");
@@ -94,7 +97,7 @@ public class LicenseClientTests
         Assert.Equal(1, r.Product.Id);
         Assert.Equal("http://mock.test/api/v1/licenses/activate", server.Last!.RequestUri!.ToString());
         Assert.Equal("{\"license_key\":\"GOOD\",\"instance_id\":\"dev-1\"}", server.LastBody);
-        Assert.Equal("sendclap-dotnet/0.3.0", server.Last.Headers.UserAgent.ToString());
+        Assert.Equal("sendclap-dotnet/0.4.0", server.Last.Headers.UserAgent.ToString());
         Assert.Null(server.Last.Headers.Authorization);
     }
 
@@ -121,6 +124,21 @@ public class LicenseClientTests
     {
         var e = await Assert.ThrowsAsync<DisabledLicenseException>(() => Client().ActivateAsync("REFUNDED", "dev-1"));
         Assert.Equal((403, "license_disabled"), (e.Status, e.Code));
+    }
+
+    [Fact]
+    public async Task ExpiredKey()
+    {
+        var expires = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+        var v = await Client().ValidateAsync("LAPSED", "dev-1");
+        Assert.False(v.Valid);
+        Assert.Equal(LicenseStatus.Expired, v.Status);
+        Assert.Equal(expires, v.License!.ExpiresAt);
+        Assert.Equal("Pro", v.Product!.Name);
+
+        var e = await Assert.ThrowsAsync<ExpiredLicenseException>(() => Client().ActivateAsync("LAPSED", "dev-1"));
+        Assert.Equal((403, "license_expired"), (e.Status, e.Code));
+        Assert.Equal(expires, e.License.ExpiresAt);
     }
 
     [Fact]
@@ -219,7 +237,7 @@ public class ApiClientTests
         Assert.Equal("https://sendclap.com/checkout/0xabc", c.Url);
         Assert.Equal("{\"type\":\"product\",\"product_id\":1,\"email\":\"b@example.com\"}", server.LastBody);
         Assert.Equal("Bearer sc_test", server.Last!.Headers.Authorization!.ToString());
-        Assert.Equal("sendclap-dotnet/0.3.0", server.Last.Headers.UserAgent.ToString());
+        Assert.Equal("sendclap-dotnet/0.4.0", server.Last.Headers.UserAgent.ToString());
     }
 
     [Fact]

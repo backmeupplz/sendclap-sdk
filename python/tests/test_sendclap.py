@@ -10,12 +10,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import sendclap  # noqa: E402
 from sendclap import (  # noqa: E402
-    ActivationLimitError, ApiClient, DisabledLicenseError, InstanceNotFoundError, InvalidLicenseError,
+    ActivationLimitError, ApiClient, DisabledLicenseError, ExpiredLicenseError, InstanceNotFoundError, InvalidLicenseError,
     LicenseClient, NetworkError, SendclapError,
 )
 
 LICENSE = {"key": "GOOD", "activations": 1, "max_activations": 3}
 PRODUCT = {"id": 1, "name": "Pro"}
+LAPSED = {**LICENSE, "expires_at": "2026-01-01T00:00:00.000Z"}
 CHECKOUT = {"id": "0xabc", "status": "pending", "type": "product", "amount": 29, "currency": "usd",
             "method": "card", "email": "buyer@example.com", "url": "http://x/checkout/0xabc", "paid_at": None}
 PAYMENTS = [{"id": 3, "status": "paid"}, {"id": 2, "status": "paid"}, {"id": 1, "status": "paid"}]
@@ -45,6 +46,8 @@ class Mock(BaseHTTPRequestHandler):
             if action == "validate":
                 if key == "REFUNDED":
                     return self.reply(200, {"valid": False, "status": "disabled"})
+                if key == "LAPSED":
+                    return self.reply(200, {"valid": False, "status": "expired", "license": LAPSED, "product": PRODUCT})
                 if key not in ("GOOD", "FULL"):
                     return self.reply(200, {"valid": False, "status": "not_found"})
                 ok = inst in (None, "dev-1")
@@ -52,6 +55,9 @@ class Mock(BaseHTTPRequestHandler):
                                         "license": LICENSE, "product": PRODUCT})
             if key == "REFUNDED":
                 return self.reply(403, {"error": "this license key is disabled", "code": "license_disabled"})
+            if key == "LAPSED":
+                return self.reply(403, {"error": "this license key has expired", "code": "license_expired",
+                                        "license": LAPSED, "product": PRODUCT})
             if key not in ("GOOD", "FULL"):
                 return self.reply(404, {"error": "license key not found", "code": "license_not_found"})
             if not inst:
@@ -118,7 +124,7 @@ class SendclapTest(unittest.TestCase):
         method, path, headers, body = SEEN[-1]
         self.assertEqual((method, path), ("POST", "/api/v1/licenses/activate"))
         self.assertEqual(body, {"license_key": "GOOD", "instance_id": "dev-1"})
-        self.assertEqual(headers["User-Agent"], "sendclap-python/0.3.0")
+        self.assertEqual(headers["User-Agent"], "sendclap-python/0.4.0")
         self.assertEqual(headers["Content-Type"], "application/json")
         self.assertNotIn("Authorization", headers)
 
@@ -141,6 +147,14 @@ class SendclapTest(unittest.TestCase):
             self.lic.activate("REFUNDED", "dev-1")
         self.assertNotIsInstance(cm.exception, InvalidLicenseError)
         self.assertEqual((cm.exception.status, cm.exception.code), (403, "license_disabled"))
+
+    def test_expired_key(self):
+        r = self.lic.validate("LAPSED", "dev-1")
+        self.assertEqual((r.valid, r.status, r.license.expires_at, r.product.name), (False, "expired", "2026-01-01T00:00:00.000Z", "Pro"))
+        with self.assertRaises(ExpiredLicenseError) as cm:
+            self.lic.activate("LAPSED", "dev-1")
+        self.assertEqual((cm.exception.status, cm.exception.code, cm.exception.license.expires_at),
+                         (403, "license_expired", "2026-01-01T00:00:00.000Z"))
 
     def test_activate_missing_instance(self):
         with self.assertRaises(SendclapError) as cm:

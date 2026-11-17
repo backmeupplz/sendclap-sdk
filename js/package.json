@@ -1,6 +1,6 @@
 {
   "name": "sendclap",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Official Sendclap client: license key checks for the apps you ship and the creator REST API.",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/backmeupplz/sendclap-sdk.git", "directory": "js" },

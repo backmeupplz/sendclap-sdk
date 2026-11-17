@@ -12,6 +12,7 @@ import (
 	"testing"
 )
 
+const lapsed = `"license":{"key":"LAPSED","activations":1,"max_activations":3,"expires_at":"2026-01-01T00:00:00.000Z"},"product":{"id":1,"name":"Pro"}`
 const lic = `"license":{"key":"GOOD","activations":1,"max_activations":3},"product":{"id":1,"name":"Pro"}`
 
 func mock(t *testing.T) *httptest.Server {
@@ -21,7 +22,7 @@ func mock(t *testing.T) *httptest.Server {
 			w.WriteHeader(status)
 			io.WriteString(w, body)
 		}
-		if ua := r.Header.Get("User-Agent"); ua != "sendclap-go/0.3.0" {
+		if ua := r.Header.Get("User-Agent"); ua != "sendclap-go/0.4.0" {
 			t.Errorf("user agent %q", ua)
 		}
 		if action, ok := strings.CutPrefix(r.URL.Path, "/api/v1/licenses/"); ok {
@@ -36,6 +37,8 @@ func mock(t *testing.T) *httptest.Server {
 			switch {
 			case action == "validate" && b.Key == "BAD":
 				send(200, `{"valid":false,"status":"not_found"}`)
+			case action == "validate" && b.Key == "LAPSED":
+				send(200, `{"valid":false,"status":"expired",`+lapsed+`}`)
 			case action == "validate" && b.Key == "REFUNDED":
 				send(200, `{"valid":false,"status":"disabled"}`)
 			case action == "validate":
@@ -43,6 +46,8 @@ func mock(t *testing.T) *httptest.Server {
 				send(200, fmt.Sprintf(`{"valid":%t,"status":%q,%s}`, ok, map[bool]string{true: "active", false: "not_activated"}[ok], lic))
 			case b.Key == "BAD":
 				send(404, `{"error":"license key not found","code":"license_not_found"}`)
+			case b.Key == "LAPSED":
+				send(403, `{"error":"this license key has expired","code":"license_expired",`+lapsed+`}`)
 			case b.Key == "REFUNDED":
 				send(403, `{"error":"this license key is disabled","code":"license_disabled"}`)
 			case b.Instance == "":
@@ -147,6 +152,21 @@ func TestLicense(t *testing.T) {
 	v, err = l.Validate(ctx, "REFUNDED", "dev-1")
 	if err != nil || v.Valid || v.Status != StatusDisabled || v.License != nil {
 		t.Fatalf("validate REFUNDED: %+v %v", v, err)
+	}
+}
+
+func TestLicenseExpired(t *testing.T) {
+	l := NewLicenseClient(WithBaseURL(mock(t).URL))
+
+	v, err := l.Validate(ctx, "LAPSED", "dev-1")
+	if err != nil || v.Valid || v.Status != StatusExpired || v.License == nil || v.License.ExpiresAt == nil || *v.License.ExpiresAt != "2026-01-01T00:00:00.000Z" || v.Product.Name != "Pro" {
+		t.Fatalf("validate LAPSED: %+v %v", v, err)
+	}
+	_, err = l.Activate(ctx, "LAPSED", "dev-1")
+	var exp *ExpiredLicenseError
+	var e *Error
+	if !errors.Is(err, ErrLicenseExpired) || errors.Is(err, ErrLicenseDisabled) || !errors.As(err, &exp) || *exp.License.ExpiresAt != "2026-01-01T00:00:00.000Z" || !errors.As(err, &e) || e.Status != 403 || e.Code != "license_expired" {
+		t.Fatalf("activate LAPSED: %v", err)
 	}
 }
 

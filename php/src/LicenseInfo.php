@@ -6,7 +6,7 @@ namespace Sendclap;
 
 final class LicenseInfo
 {
-    public function __construct(public readonly string $key, public readonly int $activations, public readonly int $maxActivations)
+    public function __construct(public readonly string $key, public readonly int $activations, public readonly int $maxActivations, public readonly ?string $expiresAt = null)
     {
     }
 
@@ -14,6 +14,6 @@ final class LicenseInfo
     public static function from(array $d): self
     {
         $l = is_array($d['license'] ?? null) ? $d['license'] : [];
-        return new self((string) ($l['key'] ?? ''), (int) ($l['activations'] ?? 0), (int) ($l['max_activations'] ?? 0));
+        return new self((string) ($l['key'] ?? ''), (int) ($l['activations'] ?? 0), (int) ($l['max_activations'] ?? 0), isset($l['expires_at']) ? (string) $l['expires_at'] : null);
     }
 }

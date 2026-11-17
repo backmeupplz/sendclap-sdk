@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	Version        = "0.3.0"
+	Version        = "0.4.0"
 	DefaultBaseURL = "https://sendclap.com"
 	DefaultTimeout = 15 * time.Second
 )
@@ -24,6 +24,7 @@ const (
 var (
 	ErrInvalidLicense   = errors.New("sendclap: invalid license")          // license_not_found
 	ErrLicenseDisabled  = errors.New("sendclap: license disabled")         // license_disabled: refunded or disputed
+	ErrLicenseExpired   = errors.New("sendclap: license expired")          // license_expired: subscription over
 	ErrInstanceNotFound = errors.New("sendclap: instance not activated")   // instance_not_found
 	ErrActivationLimit  = errors.New("sendclap: activation limit reached") // activation_limit
 	ErrNetwork          = errors.New("sendclap: network error")            // network_error
@@ -43,6 +44,7 @@ type Error struct {
 var kinds = map[string]error{
 	"license_not_found":  ErrInvalidLicense,
 	"license_disabled":   ErrLicenseDisabled,
+	"license_expired":    ErrLicenseExpired,
 	"instance_not_found": ErrInstanceNotFound,
 	"activation_limit":   ErrActivationLimit,
 }
@@ -67,6 +69,17 @@ type ActivationLimitError struct {
 
 func (e *ActivationLimitError) Error() string { return e.Err.Error() }
 func (e *ActivationLimitError) Unwrap() error { return e.Err }
+
+// ExpiredLicenseError is returned by Activate when a subscription key has expired; License.ExpiresAt says when.
+// errors.As(err, &*Error) also matches it (Status 403).
+type ExpiredLicenseError struct {
+	Err     *Error
+	License LicenseInfo
+	Product ProductRef
+}
+
+func (e *ExpiredLicenseError) Error() string { return e.Err.Error() }
+func (e *ExpiredLicenseError) Unwrap() error { return e.Err }
 
 type client struct {
 	base   string
@@ -138,6 +151,9 @@ func (c *client) do(ctx context.Context, method, path string, body, out any) err
 	if base.kind == ErrActivationLimit {
 		return &ActivationLimitError{Err: &base, License: e.License, Product: e.Product}
 	}
+	if base.kind == ErrLicenseExpired {
+		return &ExpiredLicenseError{Err: &base, License: e.License, Product: e.Product}
+	}
 	return &base
 }
 
@@ -148,9 +164,10 @@ func InstanceName() (string, error) { return os.Hostname() }
 
 // LicenseInfo is the activation state of a license key.
 type LicenseInfo struct {
-	Key            string `json:"key"`
-	Activations    int    `json:"activations"`
-	MaxActivations int    `json:"max_activations"`
+	Key            string  `json:"key"`
+	Activations    int     `json:"activations"`
+	MaxActivations int     `json:"max_activations"`
+	ExpiresAt      *string `json:"expires_at"` // ISO 8601 time a subscription key expires, nil if bought outright
 }
 
 // ProductRef names the product a key belongs to. Fields are zero if the product was deleted.
@@ -173,6 +190,7 @@ type DeactivateResult struct {
 const (
 	StatusActive       = "active"        // valid
 	StatusNotActivated = "not_activated" // key exists, this instance is not activated
+	StatusExpired      = "expired"       // subscription key past License.ExpiresAt
 	StatusDisabled     = "disabled"      // key disabled after a refund or dispute
 	StatusNotFound     = "not_found"     // key unknown
 )
@@ -180,7 +198,7 @@ const (
 type ValidateResult struct {
 	Valid   bool         `json:"valid"`
 	Status  string       `json:"status"`
-	License *LicenseInfo `json:"license,omitempty"` // nil when Status is StatusNotFound or StatusDisabled
+	License *LicenseInfo `json:"license,omitempty"` // nil when Status is StatusNotFound or StatusDisabled (set for StatusExpired)
 	Product *ProductRef  `json:"product,omitempty"`
 }
 
@@ -207,7 +225,7 @@ func (l *LicenseClient) Activate(ctx context.Context, licenseKey, instanceName s
 }
 
 // Validate checks a key, and with a non-empty instanceID that the instance is activated.
-// An unknown or disabled key is a result (StatusNotFound, StatusDisabled), not an error; errors mean the answer is unknown (e.g. offline).
+// An unknown, disabled or expired key is a result (StatusNotFound, StatusDisabled, StatusExpired), not an error; errors mean the answer is unknown (e.g. offline).
 func (l *LicenseClient) Validate(ctx context.Context, licenseKey, instanceID string) (*ValidateResult, error) {
 	var r ValidateResult
 	if err := l.c.do(ctx, http.MethodPost, "/licenses/validate", licenseBody(licenseKey, instanceID), &r); err != nil {

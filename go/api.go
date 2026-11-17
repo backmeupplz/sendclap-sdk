@@ -133,13 +133,14 @@ type Member struct {
 }
 
 type IssuedLicense struct {
-	Key            string `json:"key"`
-	Product        string `json:"product"`
-	Email          string `json:"email"`
-	Activations    int    `json:"activations"`
-	MaxActivations int    `json:"max_activations"`
-	Disabled       bool   `json:"disabled"`
-	IssuedAt       string `json:"issued_at"`
+	Key            string  `json:"key"`
+	Product        string  `json:"product"`
+	Email          string  `json:"email"`
+	Activations    int     `json:"activations"`
+	MaxActivations int     `json:"max_activations"`
+	Disabled       bool    `json:"disabled"`
+	IssuedAt       string  `json:"issued_at"`
+	ExpiresAt      *string `json:"expires_at"`
 }
 
 type Dispute struct {
@@ -166,13 +167,14 @@ type Product struct {
 }
 
 type Membership struct {
-	ID          int     `json:"id"`
-	Name        string  `json:"name"`
-	Description string  `json:"description"`
-	Price       float64 `json:"price"`
-	Currency    string  `json:"currency"`
-	Interval    string  `json:"interval"`
-	X402        string  `json:"x402"`
+	ID               int     `json:"id"`
+	Name             string  `json:"name"`
+	Description      string  `json:"description"`
+	Price            float64 `json:"price"`
+	Currency         string  `json:"currency"`
+	Interval         string  `json:"interval"`
+	X402             string  `json:"x402"`
+	LicenseProductID *int    `json:"license_product_id"`
 }
 
 type Creator struct {

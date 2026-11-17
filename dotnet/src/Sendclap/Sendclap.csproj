@@ -5,7 +5,7 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <PackageId>Sendclap</PackageId>
-    <Version>0.3.0</Version>
+    <Version>0.4.0</Version>
     <Authors>Borodutch Labs</Authors>
     <Description>Official Sendclap client: license key activation and validation for apps, plus the creator REST API.</Description>
     <PackageTags>sendclap;license;licensing;payments</PackageTags>

@@ -8,6 +8,7 @@ declare(strict_types=1);
 use Sendclap\ActivationLimitException;
 use Sendclap\ApiClient;
 use Sendclap\DisabledLicenseException;
+use Sendclap\ExpiredLicenseException;
 use Sendclap\Http;
 use Sendclap\InstanceNotFoundException;
 use Sendclap\InvalidLicenseException;
@@ -92,7 +93,7 @@ test('activate', function () use ($lic) {
     eq('POST', $req['method']);
     eq('/api/v1/licenses/activate', $req['uri']);
     eq(['license_key' => 'GOOD', 'instance_id' => 'dev-1'], $req['body']);
-    eq('sendclap-php/0.3.0', $req['headers']['user-agent']);
+    eq('sendclap-php/0.4.0', $req['headers']['user-agent']);
     eq('application/json', $req['headers']['content-type']);
     eq(false, isset($req['headers']['authorization']));
 });
@@ -115,6 +116,13 @@ test('activate disabled key', function () use ($lic) {
     $e = throws(DisabledLicenseException::class, fn () => $lic->activate('REFUNDED', 'dev-1'));
     eq(false, $e instanceof InvalidLicenseException);
     eq([403, 'license_disabled'], [$e->status, $e->errorCode]);
+});
+
+test('expired key', function () use ($lic) {
+    $r = $lic->validate('LAPSED', 'dev-1');
+    eq([false, 'expired', '2026-01-01T00:00:00.000Z', 1], [$r->valid, $r->status, $r->license->expiresAt, $r->product->id]);
+    $e = throws(ExpiredLicenseException::class, fn () => $lic->activate('LAPSED', 'dev-1'));
+    eq([403, 'license_expired', '2026-01-01T00:00:00.000Z'], [$e->status, $e->errorCode, $e->license->expiresAt]);
 });
 
 test('activate missing instance', function () use ($lic) {

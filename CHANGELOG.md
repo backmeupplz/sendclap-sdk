@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0
+
+Subscription license keys.
+
+- `validate` can answer the new status `expired` (`StatusExpired`, `ValidationStatus::Expired`, `LicenseStatus.Expired`, `.expired`) with the license and product present. Statuses are now `active`, `not_activated`, `expired`, `disabled` and `not_found`.
+- The license has `expires_at` (`ExpiresAt`, `expiresAt`), an ISO 8601 time or null for a key bought outright, in `validate`, `activate` and `deactivate` results and in the licenses list.
+- `activate` on an expired key fails with the typed error for `license_expired` (403), which carries the license and product: `ExpiredLicenseError`, `ErrLicenseExpired` and `*ExpiredLicenseError`, `Error::LicenseExpired`, `ExpiredLicenseException`, `.licenseExpired`.
+- Memberships have `license_product_id` (`LicenseProductID`, `LicenseProductId`, `licenseProductId`), the product whose license a membership includes, or null. The PHP client returns plain arrays and needs no change.
+- Swift: `LicenseInfo.expiresAt` is a new stored property, so code that builds a `LicenseInfo` by hand must pass it.
+
 ## 0.3.0
 
 Breaking changes to follow the Sendclap API.

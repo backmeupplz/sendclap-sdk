@@ -9,7 +9,7 @@ use std::time::Duration;
 mod api;
 pub use api::*;
 
-pub const VERSION: &str = "0.3.0";
+pub const VERSION: &str = "0.4.0";
 pub const DEFAULT_BASE_URL: &str = "https://sendclap.com";
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -19,6 +19,12 @@ pub enum Error {
     InvalidLicense { message: String },
     /// `license_disabled` (403): the key was disabled after a refund or dispute.
     LicenseDisabled { message: String },
+    /// `license_expired` (403): the subscription key has expired; `license.expires_at` says when.
+    LicenseExpired {
+        message: String,
+        license: LicenseInfo,
+        product: ProductRef,
+    },
     /// `instance_not_found` (404): deactivate for an instance that isn't activated.
     InstanceNotFound { message: String },
     /// `activation_limit` (409): every activation of the key is in use.
@@ -44,7 +50,7 @@ impl Error {
     pub fn status(&self) -> u16 {
         match self {
             Error::InvalidLicense { .. } | Error::InstanceNotFound { .. } => 404,
-            Error::LicenseDisabled { .. } => 403,
+            Error::LicenseDisabled { .. } | Error::LicenseExpired { .. } => 403,
             Error::ActivationLimit { .. } => 409,
             Error::Api { status, .. } => *status,
             Error::Network(_) => 0,
@@ -56,6 +62,7 @@ impl Error {
         match self {
             Error::InvalidLicense { .. } => "license_not_found",
             Error::LicenseDisabled { .. } => "license_disabled",
+            Error::LicenseExpired { .. } => "license_expired",
             Error::InstanceNotFound { .. } => "instance_not_found",
             Error::ActivationLimit { .. } => "activation_limit",
             Error::Api { code, .. } => code,
@@ -70,6 +77,7 @@ impl std::fmt::Display for Error {
             Error::Network(m) => write!(f, "sendclap: network error: {m}"),
             Error::InvalidLicense { message }
             | Error::LicenseDisabled { message }
+            | Error::LicenseExpired { message, .. }
             | Error::InstanceNotFound { message }
             | Error::ActivationLimit { message, .. }
             | Error::Api { message, .. } => {
@@ -159,6 +167,11 @@ impl Http {
         Err(match code.as_str() {
             "license_not_found" => Error::InvalidLicense { message },
             "license_disabled" => Error::LicenseDisabled { message },
+            "license_expired" => Error::LicenseExpired {
+                message,
+                license: serde_json::from_value(v["license"].clone()).unwrap_or_default(),
+                product: serde_json::from_value(v["product"].clone()).unwrap_or_default(),
+            },
             "instance_not_found" => Error::InstanceNotFound { message },
             "activation_limit" => Error::ActivationLimit {
                 message,
@@ -180,6 +193,9 @@ pub struct LicenseInfo {
     pub key: String,
     pub activations: u32,
     pub max_activations: u32,
+    /// ISO 8601 time a subscription key expires, `None` for a key bought outright.
+    #[serde(default)]
+    pub expires_at: Option<String>,
 }
 
 /// The product a key belongs to; fields are `None` if the product was deleted.
@@ -210,6 +226,8 @@ pub enum ValidationStatus {
     Active,
     /// The key exists but this instance is not activated.
     NotActivated,
+    /// A subscription key past its `expires_at`.
+    Expired,
     /// The key was disabled after a refund or dispute.
     Disabled,
     /// The key is unknown.
@@ -220,7 +238,7 @@ pub enum ValidationStatus {
 pub struct ValidateResult {
     pub valid: bool,
     pub status: ValidationStatus,
-    /// `None` when status is `NotFound` or `Disabled`.
+    /// `None` when status is `NotFound` or `Disabled`; present for `Expired`.
     pub license: Option<LicenseInfo>,
     pub product: Option<ProductRef>,
 }
@@ -266,8 +284,8 @@ impl LicenseClient {
         self.call("activate", license_key, Some(instance_name))
     }
 
-    /// Checks a key, and with an instance id that the instance is activated. An unknown or disabled
-    /// key is `Ok` with status `NotFound` or `Disabled`; `Err` means the answer is unknown (e.g. offline).
+    /// Checks a key, and with an instance id that the instance is activated. An unknown, disabled or expired
+    /// key is `Ok` with status `NotFound`, `Disabled` or `Expired`; `Err` means the answer is unknown (e.g. offline).
     pub fn validate(&self, license_key: &str, instance_id: Option<&str>) -> Result<ValidateResult> {
         self.call("validate", license_key, instance_id)
     }

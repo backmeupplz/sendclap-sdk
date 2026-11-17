@@ -208,6 +208,7 @@ pub struct IssuedLicense {
     pub max_activations: u32,
     pub disabled: bool,
     pub issued_at: String,
+    pub expires_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -233,6 +234,7 @@ pub struct Product {
     pub issues_license_key: bool,
     pub page: String,
     pub x402: Option<String>,
+    pub license_product_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

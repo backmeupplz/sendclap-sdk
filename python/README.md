@@ -19,7 +19,7 @@ def licensed(key: str, cache: dict) -> bool:
         return time.time() - cache.get("validated_at", 0) < 7 * 86400
     if r.valid:
         cache["validated_at"] = time.time()  # persist cache to disk yourself
-    return r.valid  # status "not_found", "disabled" or "not_activated": lock the app
+    return r.valid  # status "not_found", "disabled", "expired" or "not_activated": lock the app
 ```
 
 On first run, activate the device and remember the instance id:
@@ -33,7 +33,7 @@ except DisabledLicenseError: ...  # the payment was refunded or disputed
 except ActivationLimitError as e: print(f"Used on {e.license.activations}/{e.license.max_activations} devices")
 ```
 
-`deactivate(key, instance_id)` frees the device again, and raises `InstanceNotFoundError` if it wasn't activated. `validate` never raises for a bad key; it returns `status` `"active"`, `"not_activated"`, `"disabled"` (refunded or disputed) or `"not_found"` (unknown key), and raises `NetworkError` only when it could not reach Sendclap, so you can tell "offline" from "not found" and show "this license was refunded" for `"disabled"`.
+`deactivate(key, instance_id)` frees the device again, and raises `InstanceNotFoundError` if it wasn't activated. `validate` never raises for a bad key; it returns `status` `"active"`, `"not_activated"`, `"expired"` (subscription over, see `license.expires_at`), `"disabled"` (refunded or disputed) or `"not_found"` (unknown key), and raises `NetworkError` only when it could not reach Sendclap, so you can tell "offline" from "not found" and show "this license was refunded" for `"disabled"`.
 
 **Instance name:** `instance_name()` is the machine's hostname. It is sent to Sendclap and shown to the creator, and two machines with the same hostname share one activation. If that matters, pass your own stable id instead (for example a `uuid4()` saved on first run). The instance id Sendclap returns is the name you send.
 
@@ -69,6 +69,7 @@ Every exception is a `SendclapError` with `.status`, `.code` (the server's machi
 |---|---|---|
 | `InvalidLicenseError` | `license_not_found` | 404: the key doesn't exist |
 | `DisabledLicenseError` | `license_disabled` | 403: disabled after a refund or dispute |
+| `ExpiredLicenseError` | `license_expired` | 403: the subscription key expired; `.license.expires_at` says when |
 | `InstanceNotFoundError` | `instance_not_found` | 404: `deactivate` for an instance that isn't activated |
 | `ActivationLimitError` | `activation_limit` | 409: every activation is used; `.license` and `.product` say how many |
 | `NetworkError` | `network_error` | No response: offline, DNS, TLS, timeout (`.status == 0`) |

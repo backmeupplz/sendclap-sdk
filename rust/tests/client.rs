@@ -4,6 +4,7 @@ use std::net::TcpListener;
 use std::time::Duration;
 
 const LIC: &str = r#""license":{"key":"GOOD","activations":1,"max_activations":3},"product":{"id":1,"name":"Pro"}"#;
+const LAPSED: &str = r#""license":{"key":"LAPSED","activations":1,"max_activations":3,"expires_at":"2026-01-01T00:00:00.000Z"},"product":{"id":1,"name":"Pro"}"#;
 const PAYMENT: &str = r#""id":42,"type":"product","method":"card","status":"paid","amount":29,"fee":0.29,"currency":"usd","email":"b@x.com","message":null,"reference":"pi:1","test":false,"created_at":"2026-11-13T18:04:11.000Z""#;
 
 struct Req {
@@ -25,7 +26,7 @@ impl Req {
 
 /// Canned Sendclap answers; a failed expectation answers 418 so the client call fails the test.
 fn route(r: &Req) -> (u16, String) {
-    if r.header("user-agent") != "sendclap-rust/0.3.0" {
+    if r.header("user-agent") != "sendclap-rust/0.4.0" {
         return (418, "{}".into());
     }
     if let Some(action) = r.target.strip_prefix("/api/v1/licenses/") {
@@ -39,12 +40,14 @@ fn route(r: &Req) -> (u16, String) {
         );
         return match (action, key) {
             ("validate", "BAD") => (200, r#"{"valid":false,"status":"not_found"}"#.into()),
+            ("validate", "LAPSED") => (200, format!(r#"{{"valid":false,"status":"expired",{LAPSED}}}"#)),
             ("validate", "REFUNDED") => (200, r#"{"valid":false,"status":"disabled"}"#.into()),
             ("validate", _) => {
                 let ok = inst.is_empty() || inst == "dev-1";
                 (200, format!(r#"{{"valid":{ok},"status":"{}",{LIC}}}"#, if ok { "active" } else { "not_activated" }))
             }
             (_, "BAD") => (404, r#"{"error":"license key not found","code":"license_not_found"}"#.into()),
+            (_, "LAPSED") => (403, format!(r#"{{"error":"this license key has expired","code":"license_expired",{LAPSED}}}"#)),
             (_, "REFUNDED") => (403, r#"{"error":"this license key is disabled","code":"license_disabled"}"#.into()),
             _ if inst.is_empty() => (400, r#"{"error":"instance_id is required","code":"bad_request"}"#.into()),
             ("deactivate", _) if inst != "dev-1" => (404, r#"{"error":"that instance is not activated","code":"instance_not_found"}"#.into()),
@@ -171,6 +174,32 @@ fn license_success() {
 }
 
 #[test]
+fn expired_license() {
+    let base = mock();
+    let l = licenses(&base);
+    let v = l.validate("LAPSED", Some("dev-1")).unwrap();
+    assert_eq!((v.valid, v.status), (false, ValidationStatus::Expired));
+    assert_eq!(
+        v.license.unwrap().expires_at.as_deref(),
+        Some("2026-01-01T00:00:00.000Z")
+    );
+    assert_eq!(v.product.unwrap().name.as_deref(), Some("Pro"));
+    match l.activate("LAPSED", "dev-1") {
+        Err(e @ Error::LicenseExpired { .. }) => {
+            assert_eq!((e.status(), e.code()), (403, "license_expired"));
+            let Error::LicenseExpired { license, .. } = e else {
+                unreachable!()
+            };
+            assert_eq!(
+                license.expires_at.as_deref(),
+                Some("2026-01-01T00:00:00.000Z")
+            );
+        }
+        r => panic!("{r:?}"),
+    }
+}
+
+#[test]
 fn license_errors() {
     let base = mock();
     let l = licenses(&base);
@@ -247,8 +276,18 @@ fn api() {
     assert_eq!(c.paid_at, None);
     let c = a.get_checkout("0xabc").unwrap();
     assert_eq!(
-        (c.status.as_str(), c.email, c.url.as_str(), c.paid_at.as_deref()),
-        ("paid", None, "https://sendclap.com/checkout/0xabc", Some("2026-11-14T10:00:00.000Z"))
+        (
+            c.status.as_str(),
+            c.email,
+            c.url.as_str(),
+            c.paid_at.as_deref()
+        ),
+        (
+            "paid",
+            None,
+            "https://sendclap.com/checkout/0xabc",
+            Some("2026-11-14T10:00:00.000Z")
+        )
     );
     let s = a.me().unwrap();
     assert_eq!((s.last_30_days.net, s.members.active), (57.42, 1));

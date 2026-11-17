@@ -22,6 +22,7 @@ function reply(int $status, mixed $data, string $type = 'application/json'): voi
 
 $license = ['key' => 'GOOD', 'activations' => 1, 'max_activations' => 3];
 $product = ['id' => 1, 'name' => 'Pro'];
+$lapsed = ['expires_at' => '2026-01-01T00:00:00.000Z'] + ['key' => 'LAPSED'] + $license;
 $checkout = ['id' => '0xabc', 'status' => 'pending', 'type' => 'product', 'amount' => 29, 'currency' => 'usd', 'method' => 'card', 'email' => 'buyer@example.com', 'url' => 'http://x/checkout/0xabc', 'paid_at' => null];
 $fail = fn (int $status, string $code, string $error, array $extra = []) => reply($status, $extra + ['error' => $error, 'code' => $code]);
 
@@ -32,10 +33,13 @@ if (str_starts_with($path, '/api/v1/licenses/')) {
     if ($action === 'validate') {
         $ok = $inst === null || $inst === 'dev-1';
         reply(200, match (true) {
+            $key === 'LAPSED' => ['valid' => false, 'status' => 'expired', 'license' => $lapsed, 'product' => $product],
             $key === 'REFUNDED' => ['valid' => false, 'status' => 'disabled'],
             $key !== 'GOOD' && $key !== 'FULL' => ['valid' => false, 'status' => 'not_found'],
             default => ['valid' => $ok, 'status' => $ok ? 'active' : 'not_activated', 'license' => $license, 'product' => $product],
         });
+    } elseif ($key === 'LAPSED') {
+        $fail(403, 'license_expired', 'this license key has expired', ['license' => $lapsed, 'product' => $product]);
     } elseif ($key === 'REFUNDED') {
         $fail(403, 'license_disabled', 'this license key is disabled');
     } elseif ($key !== 'GOOD' && $key !== 'FULL') {

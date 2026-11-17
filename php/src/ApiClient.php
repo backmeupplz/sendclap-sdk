@@ -19,7 +19,7 @@ final class ApiClient
     }
 
     /** @param array{type: string, amount?: float|int, product_id?: int, tier_id?: int, email?: string, method?: string, message?: string} $params */
-    public function createCheckout(array $params): array // id, status, type, amount, currency, method, email, url, paid_at (ISO 8601 or null)
+    public function createCheckout(array $params): array // id, status, type (a subscription product comes back as "membership"), amount, currency, method, email, url, paid_at (ISO 8601 or null); email is required for memberships and subscription products
     {
         return $this->http->request('POST', '/checkouts', $params);
     }

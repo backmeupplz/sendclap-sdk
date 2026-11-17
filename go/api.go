@@ -164,6 +164,7 @@ type Product struct {
 	IssuesLicenseKey bool    `json:"issues_license_key"`
 	Page             string  `json:"page"`
 	X402             string  `json:"x402"`
+	Interval         *string `json:"interval"` // nil for a one-time product, "week", "month" or "year" for a subscription
 }
 
 type Membership struct {
@@ -172,7 +173,7 @@ type Membership struct {
 	Description      string  `json:"description"`
 	Price            float64 `json:"price"`
 	Currency         string  `json:"currency"`
-	Interval         string  `json:"interval"`
+	Interval         string  `json:"interval"` // "week", "month" or "year"
 	X402             string  `json:"x402"`
 	LicenseProductID *int    `json:"license_product_id"`
 }

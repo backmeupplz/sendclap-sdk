@@ -93,7 +93,7 @@ test('activate', function () use ($lic) {
     eq('POST', $req['method']);
     eq('/api/v1/licenses/activate', $req['uri']);
     eq(['license_key' => 'GOOD', 'instance_id' => 'dev-1'], $req['body']);
-    eq('sendclap-php/0.4.0', $req['headers']['user-agent']);
+    eq('sendclap-php/0.5.0', $req['headers']['user-agent']);
     eq('application/json', $req['headers']['content-type']);
     eq(false, isset($req['headers']['authorization']));
 });
@@ -205,7 +205,9 @@ test('unauthorized', function () use ($base) {
 });
 
 test('creator without key', function () use ($base) {
-    eq('Ada Builds', (new ApiClient(null, $base))->getCreator('demo')['name']);
+    $c = (new ApiClient(null, $base))->getCreator('demo');
+    eq('Ada Builds', $c['name']);
+    eq(['week', null], array_column($c['products'], 'interval'));
     eq(false, isset(last()['headers']['authorization']));
 });
 

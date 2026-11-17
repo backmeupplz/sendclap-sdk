@@ -234,7 +234,8 @@ pub struct Product {
     pub issues_license_key: bool,
     pub page: String,
     pub x402: Option<String>,
-    pub license_product_id: Option<i64>,
+    /// `None` for a one-time product, `week`, `month` or `year` for a subscription.
+    pub interval: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -244,8 +245,10 @@ pub struct Membership {
     pub description: String,
     pub price: f64,
     pub currency: String,
+    /// `week`, `month` or `year`.
     pub interval: String,
     pub x402: Option<String>,
+    pub license_product_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

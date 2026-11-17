@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0
+
+Subscription products.
+
+- Products have `interval`, a string: null (`nil`, `None`) for a one-time product, or `week`, `month` or `year` for a subscription product. It stays a plain string in every SDK, so new intervals will not break parsing. Membership `interval` can now also be `week`.
+- A `product` checkout for a subscription product comes back with `type: "membership"` and needs an `email` (the server answers 400 `bad_request` without one).
+- Fix: `license_product_id` (added in 0.4.0) was modelled on `Product` instead of `Membership` in Python and Rust, and was missing from Rust's `Membership`. It now sits on `Membership`, where the API returns it.
+
 ## 0.4.0
 
 Subscription license keys.

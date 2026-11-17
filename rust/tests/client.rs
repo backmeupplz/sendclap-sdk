@@ -26,7 +26,7 @@ impl Req {
 
 /// Canned Sendclap answers; a failed expectation answers 418 so the client call fails the test.
 fn route(r: &Req) -> (u16, String) {
-    if r.header("user-agent") != "sendclap-rust/0.4.0" {
+    if r.header("user-agent") != "sendclap-rust/0.5.0" {
         return (418, "{}".into());
     }
     if let Some(action) = r.target.strip_prefix("/api/v1/licenses/") {
@@ -60,7 +60,7 @@ fn route(r: &Req) -> (u16, String) {
         if !r.header("authorization").is_empty() {
             return (418, "{}".into());
         }
-        return (200, r#"{"handle":"demo","name":"Ada","bio":"","url":"u","avatar":null,"links":[{"label":"GitHub","url":"g"}],"payment_methods":{"card":true,"crypto":true,"x402":false},"tip":{"suggested":5,"currency":"usd","page":"u","x402":null},"memberships":[{"id":1,"name":"Supporter","description":"","price":5,"currency":"usd","interval":"month","x402":null}],"products":[]}"#.into());
+        return (200, r#"{"handle":"demo","name":"Ada","bio":"","url":"u","avatar":null,"links":[{"label":"GitHub","url":"g"}],"payment_methods":{"card":true,"crypto":true,"x402":false},"tip":{"suggested":5,"currency":"usd","page":"u","x402":null},"memberships":[{"id":1,"name":"Supporter","description":"","price":5,"currency":"usd","interval":"month","x402":null}],"products":[{"id":1,"name":"Weekly","description":"","price":3,"currency":"usd","delivers_file":false,"issues_license_key":true,"page":"p","x402":null,"interval":"week"},{"id":2,"name":"Once","description":"","price":9,"currency":"usd","delivers_file":true,"issues_license_key":false,"page":"p","x402":null,"interval":null}]}"#.into());
     }
     if !r.target.starts_with("/api/v1/") {
         return (404, "<h1>Not found</h1>".into());
@@ -352,6 +352,13 @@ fn api() {
             cr.memberships[0].interval.as_str()
         ),
         ("demo", true, "month")
+    );
+    assert_eq!(
+        (
+            cr.products[0].interval.as_deref(),
+            cr.products[1].interval.as_deref()
+        ),
+        (Some("week"), None)
     );
 }
 

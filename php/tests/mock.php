@@ -56,7 +56,7 @@ if (str_starts_with($path, '/api/v1/licenses/')) {
         reply(200, ['deactivated' => true, 'license' => ['activations' => 0] + $license, 'product' => $product]);
     }
 } elseif ($path === '/api/v1/creators/demo') {
-    reply(200, ['handle' => 'demo', 'name' => 'Ada Builds']);
+    reply(200, ['handle' => 'demo', 'name' => 'Ada Builds', 'products' => [['id' => 1, 'interval' => 'week'], ['id' => 2, 'interval' => null]]]);
 } elseif ($path === '/api/v1/broken') { // before the key check: the test calls it without a key
     reply(200, 'not json', 'text/plain');
 } elseif (str_starts_with($path, '/api/v1/') && ($headers['authorization'] ?? '') !== 'Bearer sc_test') {

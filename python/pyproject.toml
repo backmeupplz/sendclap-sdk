@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sendclap"
-version = "0.4.0"
+version = "0.5.0"
 description = "Official Sendclap client: license key checks for your app and the creator REST API"
 readme = "README.md"
 license = "MIT"

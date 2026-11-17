@@ -3,7 +3,7 @@ import Foundation
 import FoundationNetworking
 #endif
 
-public let sendclapVersion = "0.4.0"
+public let sendclapVersion = "0.5.0"
 
 /// Every error the SDK throws.
 public enum SendclapError: Error, LocalizedError, Equatable {

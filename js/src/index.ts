@@ -1,7 +1,7 @@
 // Sendclap client for JavaScript and TypeScript: license checks for the apps you ship, and the creator REST API for your server.
 // Zero dependencies; uses the global fetch (Node 18+, Bun, Deno, browsers, Electron).
 
-export const VERSION = '0.4.0'
+export const VERSION = '0.5.0'
 const DEFAULT_BASE_URL = 'https://sendclap.com'
 const DEFAULT_TIMEOUT_MS = 15_000
 
@@ -88,12 +88,13 @@ export interface ValidateResult {
 // ---------- API types ----------
 
 export interface CheckoutParams {
+  /** A `product` checkout for a subscription product comes back with `type: 'membership'`. */
   type: 'tip' | 'product' | 'membership'
   /** Tip amount in US dollars, 1 to 10000. */
   amount?: number
   product_id?: number
   tier_id?: number
-  /** Required for memberships. */
+  /** Required for memberships and subscription products (the server answers 400 `bad_request` without it). */
   email?: string
   method?: 'card' | 'crypto'
   message?: string
@@ -149,8 +150,10 @@ export interface Dispute {
 export interface Product {
   id: number; name: string; description: string; price: number; currency: string
   delivers_file: boolean; issues_license_key: boolean; page: string; x402: string | null
+  /** `null` for a one-time product, `week`, `month` or `year` for a subscription product. */
+  interval: string | null
 }
-export interface Membership { id: number; name: string; description: string; price: number; currency: string; interval: string; x402: string | null; license_product_id: number | null }
+export interface Membership { id: number; name: string; description: string; price: number; currency: string; /** `week`, `month` or `year`. */ interval: string; x402: string | null; license_product_id: number | null }
 export interface Creator {
   handle: string; name: string; bio: string; url: string; avatar: string | null
   links: { label: string; url: string }[]

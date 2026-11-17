@@ -9,7 +9,7 @@ use std::time::Duration;
 mod api;
 pub use api::*;
 
-pub const VERSION: &str = "0.4.0";
+pub const VERSION: &str = "0.5.0";
 pub const DEFAULT_BASE_URL: &str = "https://sendclap.com";
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
 

@@ -40,7 +40,7 @@ const server = createServer(async (req, res) => {
     if (inst !== 'dev-1') return fail(404, 'instance_not_found', 'that instance is not activated')
     return send(200, { deactivated: true, license: license(0), product })
   }
-  if (p === '/api/v1/creators/demo') return send(200, { handle: 'demo', name: 'Ada' })
+  if (p === '/api/v1/creators/demo') return send(200, { handle: 'demo', name: 'Ada', products: [{ id: 1, interval: 'week' }, { id: 2, interval: null }] })
   if (req.headers.authorization !== 'Bearer sc_test') return fail(401, 'invalid_api_key', 'invalid API key')
   if (p === '/api/v1/checkouts' && req.method === 'POST') return send(201, checkout)
   if (p === '/api/v1/checkouts/0xabc') return send(200, checkout)
@@ -69,7 +69,7 @@ test('activate returns the instance and license', async () => {
   const r = await licenses().activate('GOOD', 'dev-1')
   assert.deepEqual(r, { instance_id: 'dev-1', license: license(), product })
   assert.deepEqual(last.body, { license_key: 'GOOD', instance_id: 'dev-1' })
-  assert.equal(last.headers['user-agent'], 'sendclap-js/0.4.0')
+  assert.equal(last.headers['user-agent'], 'sendclap-js/0.5.0')
   assert.equal(last.headers['x-sendclap-client'], undefined)
   assert.equal(last.headers['content-type'], 'application/json')
   assert.equal(last.headers.authorization, undefined)
@@ -80,7 +80,7 @@ test('in a browser the client sends x-sendclap-client instead of User-Agent', as
   try {
     await licenses().validate('GOOD')
   } finally { delete globalThis.document }
-  assert.equal(last.headers['x-sendclap-client'], 'sendclap-js/0.4.0')
+  assert.equal(last.headers['x-sendclap-client'], 'sendclap-js/0.5.0')
   assert.ok(!/sendclap/.test(last.headers['user-agent'] ?? ''))
 })
 
@@ -219,7 +219,9 @@ test('errors are mapped by code', async () => {
 })
 
 test('getCreator works without a key', async () => {
-  assert.equal((await api('').getCreator('demo')).name, 'Ada')
+  const c = await api('').getCreator('demo')
+  assert.equal(c.name, 'Ada')
+  assert.deepEqual(c.products.map(p => p.interval), ['week', null])
   assert.equal(last.headers.authorization, undefined)
 })
 

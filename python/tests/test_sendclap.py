@@ -71,7 +71,7 @@ class Mock(BaseHTTPRequestHandler):
                 return self.reply(404, {"error": "that instance is not activated", "code": "instance_not_found"})
             return self.reply(200, {"deactivated": True, "license": dict(LICENSE, activations=0), "product": PRODUCT})
         if p == "/api/v1/creators/demo":
-            return self.reply(200, {"handle": "demo", "name": "Ada Builds"})
+            return self.reply(200, {"handle": "demo", "name": "Ada Builds", "products": [{"id": 1, "interval": "week"}, {"id": 2, "interval": None}]})
         if p.startswith("/api/v1/") and self.headers.get("Authorization") != "Bearer sc_test":
             return self.reply(401, {"error": "invalid API key", "code": "invalid_api_key"})
         if p == "/api/v1/checkouts" and method == "POST":
@@ -124,7 +124,7 @@ class SendclapTest(unittest.TestCase):
         method, path, headers, body = SEEN[-1]
         self.assertEqual((method, path), ("POST", "/api/v1/licenses/activate"))
         self.assertEqual(body, {"license_key": "GOOD", "instance_id": "dev-1"})
-        self.assertEqual(headers["User-Agent"], "sendclap-python/0.4.0")
+        self.assertEqual(headers["User-Agent"], "sendclap-python/0.5.0")
         self.assertEqual(headers["Content-Type"], "application/json")
         self.assertNotIn("Authorization", headers)
 
@@ -233,7 +233,9 @@ class SendclapTest(unittest.TestCase):
         self.assertEqual((cm.exception.status, cm.exception.code, cm.exception.message), (401, "invalid_api_key", "invalid API key"))
 
     def test_creator_without_key(self):
-        self.assertEqual(ApiClient(base_url=self.base).get_creator("demo")["name"], "Ada Builds")
+        c = ApiClient(base_url=self.base).get_creator("demo")
+        self.assertEqual(c["name"], "Ada Builds")
+        self.assertEqual([p["interval"] for p in c["products"]], ["week", None])
         self.assertNotIn("Authorization", SEEN[-1][2])
 
     def test_instance_name(self):

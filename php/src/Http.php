@@ -7,7 +7,7 @@ namespace Sendclap;
 /** @internal Shared transport for LicenseClient and ApiClient. */
 final class Http
 {
-    public const VERSION = '0.4.0';
+    public const VERSION = '0.5.0';
     public const DEFAULT_BASE_URL = 'https://sendclap.com';
 
     private string $base;

@@ -77,7 +77,7 @@ final class MockServer: URLProtocol {
             return (200, "{\"deactivated\":true,\(meta.replacingOccurrences(of: "\"activations\":1", with: "\"activations\":0"))}")
         }
         if path == "/api/v1/creators/demo" {
-            return (200, #"{"handle":"demo","name":"Ada Builds","bio":"","url":"https://sendclap.com/demo","avatar":null,"links":[{"label":"GitHub","url":"https://github.com/ada"}],"payment_methods":{"card":true,"crypto":false,"x402":false},"tip":{"suggested":5,"currency":"usd","page":"https://sendclap.com/demo","x402":null},"memberships":[{"id":1,"name":"Supporter","description":"","price":5,"currency":"usd","interval":"month","x402":null}],"products":[]}"#)
+            return (200, #"{"handle":"demo","name":"Ada Builds","bio":"","url":"https://sendclap.com/demo","avatar":null,"links":[{"label":"GitHub","url":"https://github.com/ada"}],"payment_methods":{"card":true,"crypto":false,"x402":false},"tip":{"suggested":5,"currency":"usd","page":"https://sendclap.com/demo","x402":null},"memberships":[{"id":1,"name":"Supporter","description":"","price":5,"currency":"usd","interval":"month","x402":null}],"products":[{"id":1,"name":"Weekly","description":"","price":3,"currency":"usd","delivers_file":false,"issues_license_key":true,"page":"p","x402":null,"interval":"week"},{"id":2,"name":"Once","description":"","price":9,"currency":"usd","delivers_file":true,"issues_license_key":false,"page":"p","x402":null,"interval":null}]}"#)
         }
         if !path.hasPrefix("/api/v1/") { return (404, html) }
         if req.value(forHTTPHeaderField: "Authorization") != "Bearer sc_test" { return (401, #"{"error":"invalid API key","code":"invalid_api_key"}"#) }
@@ -122,7 +122,7 @@ final class LicenseClientTests: XCTestCase {
         XCTAssertEqual(r.product, ProductRef(id: 1, name: "Pro"))
         XCTAssertEqual(MockServer.last?.url?.absoluteString, "http://mock.test/api/v1/licenses/activate")
         XCTAssertEqual(MockServer.lastBody, #"{"instance_id":"dev-1","license_key":"GOOD"}"#)
-        XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "User-Agent"), "sendclap-swift/0.4.0")
+        XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "User-Agent"), "sendclap-swift/0.5.0")
         XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "Content-Type"), "application/json")
         XCTAssertNil(MockServer.last?.value(forHTTPHeaderField: "Authorization"))
     }
@@ -225,7 +225,7 @@ final class APIClientTests: XCTestCase {
         let sent = try JSONSerialization.jsonObject(with: Data(MockServer.lastBody!.utf8)) as? NSDictionary
         XCTAssertEqual(sent, ["type": "product", "product_id": 1, "email": "b@example.com"] as NSDictionary)
         XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "Authorization"), "Bearer sc_test")
-        XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "User-Agent"), "sendclap-swift/0.4.0")
+        XCTAssertEqual(MockServer.last?.value(forHTTPHeaderField: "User-Agent"), "sendclap-swift/0.5.0")
     }
 
     func testGetCheckoutHasURL() async throws {
@@ -297,6 +297,7 @@ final class APIClientTests: XCTestCase {
         XCTAssertEqual(c.name, "Ada Builds")
         XCTAssertTrue(c.paymentMethods.card)
         XCTAssertEqual(c.memberships.first?.interval, "month")
+        XCTAssertEqual(c.products.map(\.interval), ["week", nil])
         XCTAssertEqual(c.tip.suggested, 5)
     }
 }

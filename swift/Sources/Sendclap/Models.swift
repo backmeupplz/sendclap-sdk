@@ -216,6 +216,8 @@ public struct Product: Codable, Equatable, Sendable {
     public let issuesLicenseKey: Bool
     public let page: String
     public let x402: String?
+    /// nil for a one-time product, "week", "month" or "year" for a subscription product.
+    public let interval: String?
 }
 
 public struct Membership: Codable, Equatable, Sendable {

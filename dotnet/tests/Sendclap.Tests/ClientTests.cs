@@ -61,7 +61,7 @@ sealed class MockServer : HttpMessageHandler
             return (200, $"{{\"deactivated\":true,{Meta.Replace("\"activations\":1", "\"activations\":0")}}}");
         }
         if (path == "/api/v1/creators/demo")
-            return (200, "{\"handle\":\"demo\",\"name\":\"Ada Builds\",\"bio\":\"\",\"url\":\"https://sendclap.com/demo\",\"avatar\":null,\"links\":[{\"label\":\"GitHub\",\"url\":\"https://github.com/ada\"}],\"payment_methods\":{\"card\":true,\"crypto\":false,\"x402\":false},\"tip\":{\"suggested\":5,\"currency\":\"usd\",\"page\":\"https://sendclap.com/demo\",\"x402\":null},\"memberships\":[{\"id\":1,\"name\":\"Supporter\",\"description\":\"\",\"price\":5,\"currency\":\"usd\",\"interval\":\"month\",\"x402\":null}],\"products\":[]}");
+            return (200, "{\"handle\":\"demo\",\"name\":\"Ada Builds\",\"bio\":\"\",\"url\":\"https://sendclap.com/demo\",\"avatar\":null,\"links\":[{\"label\":\"GitHub\",\"url\":\"https://github.com/ada\"}],\"payment_methods\":{\"card\":true,\"crypto\":false,\"x402\":false},\"tip\":{\"suggested\":5,\"currency\":\"usd\",\"page\":\"https://sendclap.com/demo\",\"x402\":null},\"memberships\":[{\"id\":1,\"name\":\"Supporter\",\"description\":\"\",\"price\":5,\"currency\":\"usd\",\"interval\":\"month\",\"x402\":null}],\"products\":[{\"id\":1,\"name\":\"Weekly\",\"description\":\"\",\"price\":3,\"currency\":\"usd\",\"delivers_file\":false,\"issues_license_key\":true,\"page\":\"p\",\"x402\":null,\"interval\":\"week\"},{\"id\":2,\"name\":\"Once\",\"description\":\"\",\"price\":9,\"currency\":\"usd\",\"delivers_file\":true,\"issues_license_key\":false,\"page\":\"p\",\"x402\":null,\"interval\":null}]}");
         if (!path.StartsWith("/api/v1/")) return (404, "<!doctype html><h1>Not found</h1>");
         if (auth != "Bearer sc_test") return (401, "{\"error\":\"invalid API key\",\"code\":\"invalid_api_key\"}");
         return (method, path) switch
@@ -97,7 +97,7 @@ public class LicenseClientTests
         Assert.Equal(1, r.Product.Id);
         Assert.Equal("http://mock.test/api/v1/licenses/activate", server.Last!.RequestUri!.ToString());
         Assert.Equal("{\"license_key\":\"GOOD\",\"instance_id\":\"dev-1\"}", server.LastBody);
-        Assert.Equal("sendclap-dotnet/0.4.0", server.Last.Headers.UserAgent.ToString());
+        Assert.Equal("sendclap-dotnet/0.5.0", server.Last.Headers.UserAgent.ToString());
         Assert.Null(server.Last.Headers.Authorization);
     }
 
@@ -237,7 +237,7 @@ public class ApiClientTests
         Assert.Equal("https://sendclap.com/checkout/0xabc", c.Url);
         Assert.Equal("{\"type\":\"product\",\"product_id\":1,\"email\":\"b@example.com\"}", server.LastBody);
         Assert.Equal("Bearer sc_test", server.Last!.Headers.Authorization!.ToString());
-        Assert.Equal("sendclap-dotnet/0.4.0", server.Last.Headers.UserAgent.ToString());
+        Assert.Equal("sendclap-dotnet/0.5.0", server.Last.Headers.UserAgent.ToString());
     }
 
     [Fact]
@@ -333,6 +333,7 @@ public class ApiClientTests
         Assert.Equal("Ada Builds", c.Name);
         Assert.True(c.PaymentMethods.Card);
         Assert.Equal("month", c.Memberships[0].Interval);
+        Assert.Equal(new string?[] { "week", null }, c.Products.Select(p => p.Interval).ToArray());
         Assert.Equal(5m, c.Tip.Suggested);
     }
 }

@@ -219,6 +219,8 @@ namespace Sendclap
         public bool IssuesLicenseKey { get; init; }
         public string Page { get; init; } = "";
         public string? X402 { get; init; }
+        /// <summary>Null for a one-time product, "week", "month" or "year" for a subscription product.</summary>
+        public string? Interval { get; init; }
     }
 
     public sealed record Membership

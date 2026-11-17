@@ -78,7 +78,7 @@ namespace Sendclap
 
     internal sealed class Transport
     {
-        internal const string Version = "0.4.0";
+        internal const string Version = "0.5.0";
         internal const string DefaultBaseUrl = "https://sendclap.com";
         // One shared client avoids socket exhaustion; the timeout is applied per request instead.
         static readonly HttpClient Shared = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };

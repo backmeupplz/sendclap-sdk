@@ -22,7 +22,7 @@ func mock(t *testing.T) *httptest.Server {
 			w.WriteHeader(status)
 			io.WriteString(w, body)
 		}
-		if ua := r.Header.Get("User-Agent"); ua != "sendclap-go/0.4.0" {
+		if ua := r.Header.Get("User-Agent"); ua != "sendclap-go/0.5.0" {
 			t.Errorf("user agent %q", ua)
 		}
 		if action, ok := strings.CutPrefix(r.URL.Path, "/api/v1/licenses/"); ok {
@@ -67,7 +67,7 @@ func mock(t *testing.T) *httptest.Server {
 			if r.Header.Get("Authorization") != "" {
 				t.Errorf("creator lookup sent a key")
 			}
-			send(200, `{"handle":"demo","name":"Ada","bio":"","url":"u","avatar":null,"links":[],"payment_methods":{"card":true,"crypto":true,"x402":false},"tip":{"suggested":5,"currency":"usd","page":"u","x402":null},"memberships":[{"id":1,"name":"Supporter","price":5,"interval":"month"}],"products":[]}`)
+			send(200, `{"handle":"demo","name":"Ada","bio":"","url":"u","avatar":null,"links":[],"payment_methods":{"card":true,"crypto":true,"x402":false},"tip":{"suggested":5,"currency":"usd","page":"u","x402":null},"memberships":[{"id":1,"name":"Supporter","price":5,"interval":"month"}],"products":[{"id":1,"name":"Weekly","description":"","price":3,"currency":"usd","delivers_file":false,"issues_license_key":true,"page":"p","x402":null,"interval":"week"},{"id":2,"name":"Once","description":"","price":9,"currency":"usd","delivers_file":true,"issues_license_key":false,"page":"p","x402":null,"interval":null}]}`)
 			return
 		}
 		if !strings.HasPrefix(r.URL.Path, "/api/v1/") {
@@ -268,7 +268,7 @@ func TestAPI(t *testing.T) {
 		t.Fatalf("401: %v", err)
 	}
 	cr, err := NewAPIClient("", WithBaseURL(srv.URL)).GetCreator(ctx, "demo")
-	if err != nil || cr.Handle != "demo" || !cr.PaymentMethods.Card || cr.Memberships[0].Interval != "month" {
+	if err != nil || cr.Handle != "demo" || !cr.PaymentMethods.Card || cr.Memberships[0].Interval != "month" || len(cr.Products) != 2 || cr.Products[0].Interval == nil || *cr.Products[0].Interval != "week" || cr.Products[1].Interval != nil {
 		t.Fatalf("creator %+v %v", cr, err)
 	}
 }

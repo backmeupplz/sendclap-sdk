@@ -9,7 +9,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Generic, Iterator, List, Optional, TypedDict, TypeVar
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 DEFAULT_BASE_URL = "https://sendclap.com"
 USER_AGENT = f"sendclap-python/{__version__}"
 
@@ -223,7 +223,7 @@ class Product(TypedDict):
     issues_license_key: bool
     page: str
     x402: Optional[str]
-    license_product_id: Optional[int]
+    interval: Optional[str]  # None for a one-time product, "week", "month" or "year" for a subscription
 
 
 class Membership(TypedDict):
@@ -232,8 +232,9 @@ class Membership(TypedDict):
     description: str
     price: float
     currency: str
-    interval: str
+    interval: str  # "week", "month" or "year"
     x402: Optional[str]
+    license_product_id: Optional[int]
 
 
 class Creator(TypedDict):
